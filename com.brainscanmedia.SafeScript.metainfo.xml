@@ -2,23 +2,38 @@
 <component type="desktop-application">
   <id>com.brainscanmedia.SafeScript</id>
   <name>SafeScript</name>
-  <summary>A secure code snippet manager</summary>
+  <summary>Store and organize your code snippets</summary>
   <description>
-    <p>SafeScript is a code snippet manager that lets you organize and store
-    your code snippets in folders with notes and search functionality.</p>
+    <p>SafeScript is a fast, clean code snippet manager for developers. Organize your snippets into folders, search instantly, and edit with a built-in syntax-aware code editor.</p>
+    <ul>
+      <li>Organize snippets into folders with drag-to-reorder</li>
+      <li>Syntax-aware code editor with line numbers</li>
+      <li>Dark and light mode</li>
+      <li>Instant search across all snippets</li>
+      <li>Notes field for each snippet</li>
+      <li>100% local storage — all data stays on your device</li>
+    </ul>
   </description>
   <metadata_license>MIT</metadata_license>
-  <project_license>LicenseRef-proprietary</project_license>
+  <project_license>MIT</project_license>
   <developer id="com.brainscanmedia">
     <name>BrainScanMedia.com, Inc.</name>
   </developer>
   <url type="homepage">https://brainscanmedia.com</url>
   <launchable type="desktop-id">com.brainscanmedia.SafeScript.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-dark.png</image>
+      <caption>SafeScript in dark mode showing code snippets</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-light.png</image>
+      <caption>SafeScript in light mode</caption>
+    </screenshot>
+  </screenshots>
   <releases>
-    <release version="1.2.4" date="2025-01-01">
-      <description>
-        <p>Initial release.</p>
-      </description>
+    <release version="1.2.4" date="2026-03-08">
+      <description><p>Initial Linux release.</p></description>
     </release>
   </releases>
   <content_rating type="oars-1.1"/>
