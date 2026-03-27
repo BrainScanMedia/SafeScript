@@ -41,7 +41,10 @@ sudo rm /usr/local/share/applications/safescript.desktop
 sudo rm /usr/share/icons/hicolor/256x256/apps/safescript.png
 sudo rm /usr/local/share/metainfo/com.brainscanmedia.SafeScript.metainfo.xml
 sudo gtk-update-icon-cache -f /usr/share/icons/hicolor/
+sudo update-desktop-database /usr/local/share/applications/
 ```
+
+Then log out and back in to complete removal.
 
 ## Data Storage
 Snippets are saved locally at `~/Documents/SafeScript/storage.sqlite3`.
