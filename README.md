@@ -29,10 +29,12 @@ cd SafeScript
 qmake6 SafeScript.pro
 make
 sudo make install
+sudo cp safescript.png /usr/share/icons/hicolor/256x256/apps/safescript.png
 sudo gtk-update-icon-cache -f /usr/share/icons/hicolor/
+sudo update-desktop-database /usr/local/share/applications/
 ```
 
-This installs the binary, desktop entry, icon, and metainfo system-wide so SafeScript appears in your app launcher with its icon.
+This installs the binary, desktop entry, icon, and metainfo system-wide so SafeScript appears in your app launcher with its icon. Log out and back in if the icon does not appear immediately.
 
 To uninstall:
 ```bash
