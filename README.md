@@ -51,7 +51,7 @@ Then log out and back in to complete removal.
 Then log out and back in to complete removal.
 
 ## Data Storage
-Snippets are saved locally at `~/Documents/SafeScript/storage.sqlite3`.
+Snippets are saved locally at `~/.local/share/SafeScript/storage.sqlite3`.
 
 ## License
 MIT — © BrainScanMedia.com, Inc.
