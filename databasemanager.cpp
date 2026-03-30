@@ -11,7 +11,7 @@ DatabaseManager& DatabaseManager::instance() {
 }
 
 bool DatabaseManager::open() {
-    QString appDataPath = QDir::homePath() + "/Documents/SafeScript";
+    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(appDataPath);
     QString dbPath = appDataPath + "/storage.sqlite3";
 
