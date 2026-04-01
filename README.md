@@ -2,8 +2,8 @@
 
 A clean, fast code snippet manager for Linux built with Qt6.
 
-![SafeScript Dark Mode](screenshot-dark.png)
 ![SafeScript Light Mode](screenshot-light.png)
+![SafeScript Dark Mode](screenshot-dark.png)
 
 ## Features
 - Organize snippets into folders
