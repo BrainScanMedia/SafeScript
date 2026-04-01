@@ -46,12 +46,14 @@ sudo gtk-update-icon-cache -f /usr/share/icons/hicolor/
 sudo update-desktop-database /usr/local/share/applications/
 rm -rf ~/SafeScript
 ```
-
-Then log out and back in to complete removal.
 Then log out and back in to complete removal.
 
 ## Data Storage
 Snippets are saved locally at `~/.local/share/BrainScanMedia/SafeScript/storage.sqlite3`.
+
+## Developer
+BrainScanMedia.com, Inc.
+[https://www.brainscanmedia.com](https://www.brainscanmedia.com)
 
 ## License
 MIT — © BrainScanMedia.com, Inc.
