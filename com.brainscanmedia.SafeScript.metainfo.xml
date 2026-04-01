@@ -21,6 +21,7 @@
   </developer>
   <url type="homepage">https://brainscanmedia.com</url>
   <url type="vcs-browser">https://github.com/BrainScanMedia/SafeScript</url>
+  <url type="bugtracker">https://github.com/BrainScanMedia/SafeScript/issues</url>
   <launchable type="desktop-id">com.brainscanmedia.SafeScript.desktop</launchable>
   <screenshots>
     <screenshot type="default">
