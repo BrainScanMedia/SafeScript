@@ -3,6 +3,10 @@
   <id>com.brainscanmedia.SafeScript</id>
   <name>SafeScript</name>
   <summary>Store and organize your code snippets</summary>
+  <branding>
+   <color type="primary" scheme_preference="light">#4a90d9</color>
+   <color type="primary" scheme_preference="dark">#1a3a5c</color>
+  </branding>
   <description>
     <p>SafeScript is a fast, clean code snippet manager for developers. Organize your snippets into folders, search instantly, and edit with a built-in syntax-aware code editor.</p>
     <ul>
