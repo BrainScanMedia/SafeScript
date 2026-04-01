@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>com.brainscanmedia.SafeScript</id>
   <name>SafeScript</name>
-  <summary>Store and organize your code snippets</summary>
+  <summary>Organize and manage code snippets</summary>
   <branding>
    <color type="primary" scheme_preference="light">#4a90d9</color>
    <color type="primary" scheme_preference="dark">#1a3a5c</color>
