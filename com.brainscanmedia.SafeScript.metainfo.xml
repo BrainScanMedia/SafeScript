@@ -28,14 +28,14 @@
   <url type="bugtracker">https://github.com/BrainScanMedia/SafeScript/issues</url>
   <launchable type="desktop-id">com.brainscanmedia.SafeScript.desktop</launchable>
   <screenshots>
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-dark.png</image>
-      <caption>SafeScript in dark mode showing code snippets</caption>
-    </screenshot>
-    <screenshot>
-      <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-light.png</image>
-      <caption>SafeScript in light mode</caption>
-    </screenshot>
+   <screenshot type="default">
+    <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-light.png</image>
+    <caption>SafeScript in light mode showing code snippets</caption>
+   </screenshot>
+   <screenshot>
+    <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-dark.png</image>
+    <caption>SafeScript in dark mode showing code snippets</caption>
+   </screenshot>
   </screenshots>
   <releases>
     <release version="1.2.4" date="2026-03-08">
