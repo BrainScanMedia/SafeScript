@@ -49,7 +49,14 @@ rm -rf ~/SafeScript
 Then log out and back in to complete removal.
 
 ## Data Storage
-Snippets are saved locally at `~/.local/share/BrainScanMedia/SafeScript/storage.sqlite3`.
+
+Snippets are saved locally depending on how you installed SafeScript:
+
+**Flatpak:**
+`~/.var/app/com.brainscanmedia.SafeScript/data/BrainScanMedia/SafeScript/storage.sqlite3`
+
+**Build from source:**
+`~/.local/share/BrainScanMedia/SafeScript/storage.sqlite3`
 
 ## Developer
 BrainScanMedia.com, Inc.
