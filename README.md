@@ -15,6 +15,8 @@ A clean, fast code snippet manager for Linux built with Qt6.
 
 ## Installation
 
+<a href='https://flathub.org/en/apps/com.brainscanmedia.SafeScript'><img width='200' alt='Download on Flathub' src='https://flathub.org/assets/badges/flathub-badge-en.png'/></a>
+
 ### Flatpak (recommended)
 ```bash
 flatpak install flathub com.brainscanmedia.SafeScript
