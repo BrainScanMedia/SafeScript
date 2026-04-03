@@ -23,7 +23,7 @@
   <developer id="com.brainscanmedia">
     <name>BrainScanMedia.com, Inc.</name>
   </developer>
-  <url type="homepage">https://brainscanmedia.com</url>
+  <url type="homepage">https://www.brainscanmedia.com</url>
   <url type="vcs-browser">https://github.com/BrainScanMedia/SafeScript</url>
   <url type="bugtracker">https://github.com/BrainScanMedia/SafeScript/issues</url>
   <launchable type="desktop-id">com.brainscanmedia.SafeScript.desktop</launchable>
@@ -38,7 +38,7 @@
    </screenshot>
   </screenshots>
   <releases>
-    <release version="1.2.4" date="2026-03-08">
+    <release version="1.2.5" date="2026-03-08">
       <description><p>Initial Linux release.</p></description>
     </release>
   </releases>
