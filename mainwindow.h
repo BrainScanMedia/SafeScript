@@ -16,6 +16,8 @@
 #include <QWidget>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QMouseEvent>
+#include <QEvent>
 #include "databasemanager.h"
 
 // ── CodeEditor subclass exposes protected methods for line numbers ──
@@ -104,6 +106,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private slots:
     void onNewFolder();
@@ -145,6 +148,7 @@ private:
 
     // Editor
     QLineEdit*      titleField;
+    QLineEdit*      descField;
     CodeEditor*     codeEditor;
     LineNumberArea* lineNumberArea;
     QTextEdit*      noteEditor;

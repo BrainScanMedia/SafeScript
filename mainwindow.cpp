@@ -20,6 +20,9 @@
 #include <QPalette>
 #include <QTextBlock>
 #include <QScrollBar>
+#include <QMouseEvent>
+#include <QEvent>
+#include <QStatusBar>
 
 // ── Custom delegate to draw ≡ drag handle ─────────────────────
 class FolderDelegate : public QStyledItemDelegate {
@@ -41,6 +44,43 @@ public:
         painter->drawLine(x1, cy - 4, x2, cy - 4);
         painter->drawLine(x1, cy,     x2, cy);
         painter->drawLine(x1, cy + 4, x2, cy + 4);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override {
+        QSize s = QStyledItemDelegate::sizeHint(option, index);
+        s.setHeight(qMax(s.height(), 28));
+        return s;
+    }
+};
+
+// ── Custom delegate to truncate long snippet names ─────────────
+class SnippetDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+
+        opt.text.clear();
+        QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
+
+        painter->save();
+        QRect textRect = opt.rect.adjusted(4, 0, -4, 0);
+        QString fullText = index.data(Qt::DisplayRole).toString();
+        QString elidedText = opt.fontMetrics.elidedText(fullText, Qt::ElideRight, textRect.width());
+
+        if (opt.state & QStyle::State_Selected)
+            painter->setPen(opt.palette.highlightedText().color());
+        else
+            painter->setPen(opt.palette.text().color());
+
+        painter->setFont(opt.font);
+        painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, elidedText);
         painter->restore();
     }
 
@@ -142,6 +182,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         QRect geo = screen->availableGeometry();
         move((geo.width() - width()) / 2, (geo.height() - height()) / 2);
     }
+    statusBar()->setStyleSheet(darkModeEnabled
+                                   ? "QStatusBar { background-color: #2a2a2a; border-top: 2px solid #3a3a3a; }"
+                                   : "QStatusBar { background-color: #cccccc; border-top: 2px solid #bbbbbb; }");
 }
 
 // ── Theme ─────────────────────────────────────────────────────
@@ -163,8 +206,8 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QPushButton { background-color: #3a3a3a; color: #d4d4d4; border: 1px solid #555555; padding: 4px 10px; }"
             "QPushButton:hover { background-color: #4a4a4a; }"
             "QPushButton:pressed { background-color: #094771; }"
-            "QMenuBar { background-color: #2a2a2a; color: #d4d4d4; }"
-            "QMenuBar::item:selected { background-color: #094771; }"
+            "QMenuBar { background-color: #1a1a1a; color: #d4d4d4; padding: 2px 8px; }"
+            "QMenuBar::item:selected { background-color: #094771; border-radius: 4px; }"
             "QMenu { background-color: #2a2a2a; color: #d4d4d4; border: 1px solid #3a3a3a; }"
             "QMenu::item:selected { background-color: #094771; }"
             "QLabel { background-color: transparent; color: #d4d4d4; }"
@@ -173,6 +216,7 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QScrollBar:horizontal { background-color: #2a2a2a; height: 12px; }"
             "QScrollBar::handle:horizontal { background-color: #555555; border-radius: 4px; }"
             );
+        statusBar()->setStyleSheet("QStatusBar { background-color: #2a2a2a; border-top: 2px solid #3a3a3a; }");
         folderList->setStyleSheet(
             "QListWidget { background-color: #2a2a2a; border: none; color: #d4d4d4; }"
             "QListWidget::item { padding-left: 22px; padding-top: 5px; padding-bottom: 5px;"
@@ -199,8 +243,8 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QPushButton { background-color: #e8e8e8; color: #1e1e1e; border: 1px solid #bbbbbb; padding: 4px 10px; }"
             "QPushButton:hover { background-color: #d8d8d8; color: #000000; }"
             "QPushButton:pressed { background-color: #0078d4; color: #ffffff; }"
-            "QMenuBar { background-color: #f0f0f0; color: #1e1e1e; }"
-            "QMenuBar::item:selected { background-color: #0078d4; color: #ffffff; }"
+            "QMenuBar { background-color: #CCCCCC; color: #000000; padding: 2px 8px; }"
+            "QMenuBar::item:selected { background-color: #0078d4; color: #FFFFFF; border-radius: 4px; }"
             "QMenu { background-color: #f5f5f5; color: #1e1e1e; border: 1px solid #cccccc; }"
             "QMenu::item:selected { background-color: #0078d4; color: #ffffff; }"
             "QLabel { background-color: transparent; color: #1e1e1e; }"
@@ -209,6 +253,7 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QScrollBar:horizontal { background-color: #f0f0f0; height: 12px; }"
             "QScrollBar::handle:horizontal { background-color: #bbbbbb; border-radius: 4px; }"
             );
+        statusBar()->setStyleSheet("QStatusBar { background-color: #cccccc; border-top: 2px solid #bbbbbb; }");
         folderList->setStyleSheet(
             "QListWidget { background-color: #f5f5f5; border: none; color: #1e1e1e; }"
             "QListWidget::item { padding-left: 22px; padding-top: 5px; padding-bottom: 5px;"
@@ -236,10 +281,29 @@ void MainWindow::onUpdateRequest(const QRect& rect, int dy) {
         codeEditor->updateLineNumberAreaWidth();
 }
 
+// ── Event Filter ──────────────────────────────────────────────
+bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == folderList->viewport()) {
+        if (event->type() == QEvent::MouseMove) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            QListWidgetItem* item = folderList->itemAt(me->pos());
+            folderList->viewport()->setCursor(item ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        } else if (event->type() == QEvent::Leave) {
+            folderList->viewport()->setCursor(Qt::ArrowCursor);
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
 // ── Setup UI ──────────────────────────────────────────────────
 void MainWindow::setupUI() {
-    setWindowTitle("SafeScript v1.2.4");
+    setWindowTitle("SafeScript v1.2.5");
     resize(1100, 700);
+
+    // ── Footer status bar ─────────────────────────────────
+    QStatusBar* sb = new QStatusBar(this);
+    sb->setFixedHeight(24);
+    setStatusBar(sb);
 
     // ── Sidebar ──────────────────────────────────────────
     folderList = new QListWidget;
@@ -247,6 +311,9 @@ void MainWindow::setupUI() {
     folderList->setDragDropMode(QAbstractItemView::InternalMove);
     folderList->setDefaultDropAction(Qt::MoveAction);
     folderList->setItemDelegate(new FolderDelegate(folderList));
+    folderList->setMouseTracking(true);
+    folderList->viewport()->setMouseTracking(true);
+    folderList->viewport()->installEventFilter(this);
 
     connect(folderList, &QListWidget::currentItemChanged, this, &MainWindow::onFolderSelected);
     connect(folderList, &QListWidget::itemDoubleClicked,  this, &MainWindow::onRenameFolder);
@@ -287,6 +354,9 @@ void MainWindow::setupUI() {
 
     snippetList = new QListWidget;
     snippetList->setMinimumWidth(220);
+    snippetList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    snippetList->setWordWrap(false);
+    snippetList->setItemDelegate(new SnippetDelegate(snippetList));
     connect(snippetList, &QListWidget::currentItemChanged, this, &MainWindow::onSnippetSelected);
 
     btnNewSnippet    = new QPushButton("+ New");
@@ -321,6 +391,10 @@ void MainWindow::setupUI() {
     titleField->setPlaceholderText("Title");
     titleField->setFont(monoFont);
 
+    descField = new QLineEdit;
+    descField->setPlaceholderText("Description");
+    descField->setFont(monoFont);
+
     codeEditor = new CodeEditor;
     codeEditor->setFont(monoFont);
     codeEditor->setPlaceholderText("Code goes here...");
@@ -338,19 +412,30 @@ void MainWindow::setupUI() {
     noteEditor = new QTextEdit;
     noteEditor->setFont(monoFont);
     noteEditor->setPlaceholderText("Notes...");
-    noteEditor->setMaximumHeight(120);
 
     btnSave = new QPushButton("💾 Save Script");
     btnSave->setFixedHeight(36);
     connect(btnSave, &QPushButton::clicked, this, &MainWindow::onSaveSnippet);
 
+    // ── Editor splitter for code/notes ───────────────────
+    QSplitter* editorSplitter = new QSplitter(Qt::Vertical);
+    editorSplitter->addWidget(codeEditor);
+
+    QWidget* notesWidget = new QWidget;
+    QVBoxLayout* notesLayout = new QVBoxLayout(notesWidget);
+    notesLayout->setContentsMargins(0, 6, 0, 0);
+    notesLayout->addWidget(new QLabel("Notes:"));
+    notesLayout->addWidget(noteEditor);
+    editorSplitter->addWidget(notesWidget);
+    editorSplitter->setStretchFactor(0, 3);
+    editorSplitter->setStretchFactor(1, 1);
+
     QVBoxLayout* editorLayout = new QVBoxLayout;
     editorLayout->setContentsMargins(8, 8, 8, 8);
     editorLayout->addWidget(titleField);
+    editorLayout->addWidget(descField);
     editorLayout->addWidget(new QLabel("Code:"));
-    editorLayout->addWidget(codeEditor, 1);
-    editorLayout->addWidget(new QLabel("Notes:"));
-    editorLayout->addWidget(noteEditor);
+    editorLayout->addWidget(editorSplitter, 1);
     editorLayout->addWidget(btnSave);
 
     QWidget* editorWidget = new QWidget;
@@ -370,6 +455,7 @@ void MainWindow::setupUI() {
 
 // ── Menu Bar ──────────────────────────────────────────────────
 void MainWindow::setupMenuBar() {
+    setContentsMargins(0, 6, 0, 0);
     QMenu* appMenu = menuBar()->addMenu("SafeScript");
     appMenu->addAction("About SafeScript", this, [this]() {
         QDialog dlg(this);
@@ -379,7 +465,7 @@ void MainWindow::setupMenuBar() {
         layout->setContentsMargins(20, 20, 20, 20);
         layout->setSpacing(8);
         QLabel* text = new QLabel(
-            "<b>SafeScript v1.2.4</b><br>"
+            "<b>SafeScript v1.2.5</b><br>"
             "Designed &amp; Programmed By<br>"
             "Thomas J. Allen<br>"
             "Copyright 2025<br>"
@@ -399,7 +485,10 @@ void MainWindow::setupMenuBar() {
         dlg.exec();
     });
     appMenu->addSeparator();
-    appMenu->addAction("Quit", qApp, &QApplication::quit);
+    QAction* quitAction = new QAction("Quit", this);
+    quitAction->setShortcut(QKeySequence("Ctrl+Q"));
+    connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
+    appMenu->addAction(quitAction);
 
     QMenu* editMenu = menuBar()->addMenu("Edit");
 
@@ -453,6 +542,37 @@ void MainWindow::setupMenuBar() {
     optionsMenu->addAction(darkModeAction);
 
     QMenu* helpMenu = menuBar()->addMenu("Help");
+    helpMenu->addAction("Storage Location", this, [this](){
+        QDialog dlg(this);
+        dlg.setWindowTitle("Data Storage");
+        dlg.setFixedSize(600, 320);
+        QVBoxLayout* layout = new QVBoxLayout(&dlg);
+        layout->setContentsMargins(20, 20, 20, 20);
+        layout->setSpacing(8);
+        QLabel* title = new QLabel("<b>Data Storage</b>");
+        layout->addWidget(title);
+        QLabel* desc = new QLabel("Snippets are saved locally depending on how you installed SafeScript:");
+        desc->setWordWrap(true);
+        layout->addWidget(desc);
+        QTextEdit* info = new QTextEdit;
+        info->setReadOnly(true);
+        info->setPlainText(
+            "Flatpak:\n"
+            "~/.var/app/com.brainscanmedia.SafeScript/data/BrainScanMedia/SafeScript/storage.sqlite3\n\n"
+            "Build from source:\n"
+            "~/.local/share/BrainScanMedia/SafeScript/storage.sqlite3"
+            );
+        layout->addWidget(info);
+        QPushButton* ok = new QPushButton("OK");
+        ok->setFixedWidth(80);
+        connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+        QHBoxLayout* btnRow = new QHBoxLayout;
+        btnRow->addStretch();
+        btnRow->addWidget(ok);
+        layout->addLayout(btnRow);
+        dlg.exec();
+    });
+    helpMenu->addSeparator();
     helpMenu->addAction("Visit Our Website", this, [](){
         QDesktopServices::openUrl(QUrl("https://www.brainscanmedia.com"));
     });
@@ -642,7 +762,7 @@ void MainWindow::onSaveSnippet() {
     s.id          = currentSnippetID;
     s.folderID    = currentFolderID;
     s.title       = titleField->text();
-    s.description = "";
+    s.description = descField->text();
     s.code        = codeEditor->toPlainText();
     s.note        = noteEditor->toPlainText();
     DatabaseManager::instance().updateSnippet(s);
@@ -675,12 +795,14 @@ void MainWindow::onSearchTextChanged(const QString&) {
 void MainWindow::clearEditor() {
     currentSnippetID = -1;
     titleField->clear();
+    descField->clear();
     codeEditor->clear();
     noteEditor->clear();
 }
 
 void MainWindow::populateEditor(const Snippet& s) {
     titleField->setText(s.title);
+    descField->setText(s.description);
     codeEditor->setPlainText(s.code);
     noteEditor->setText(s.note);
 }
@@ -690,3 +812,4 @@ void MainWindow::closeEvent(QCloseEvent* event) {
                                             QString("%1x%2").arg(width()).arg(height()));
     event->accept();
 }
+
