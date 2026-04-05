@@ -297,7 +297,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
 
 // ── Setup UI ──────────────────────────────────────────────────
 void MainWindow::setupUI() {
-    setWindowTitle("SafeScript v1.2.5");
+    setWindowTitle("SafeScript v1.2.6");
     resize(1100, 700);
 
     // ── Footer status bar ─────────────────────────────────
@@ -465,7 +465,7 @@ void MainWindow::setupMenuBar() {
         layout->setContentsMargins(20, 20, 20, 20);
         layout->setSpacing(8);
         QLabel* text = new QLabel(
-            "<b>SafeScript v1.2.5</b><br>"
+            "<b>SafeScript v1.2.6</b><br>"
             "Designed &amp; Programmed By<br>"
             "Thomas J. Allen<br>"
             "Copyright 2025<br>"
@@ -766,6 +766,16 @@ void MainWindow::onSaveSnippet() {
     s.code        = codeEditor->toPlainText();
     s.note        = noteEditor->toPlainText();
     DatabaseManager::instance().updateSnippet(s);
+    // Update in-memory snippet
+    for (auto& snippet : currentSnippets) {
+        if (snippet.id == s.id) {
+            snippet.title       = s.title;
+            snippet.description = s.description;
+            snippet.code        = s.code;
+            snippet.note        = s.note;
+            break;
+        }
+    }
     if (auto* item = snippetList->currentItem())
         item->setText(s.title.isEmpty() ? "Untitled Snippet" : s.title);
 

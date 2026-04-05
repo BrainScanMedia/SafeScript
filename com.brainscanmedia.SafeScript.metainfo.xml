@@ -38,6 +38,9 @@
    </screenshot>
   </screenshots>
   <releases>
+    <release version="1.2.6" date="2026-04-04">
+     <description><p>Fixed description field not updating in memory after save.</p></description>
+    </release>
     <release version="1.2.5" date="2026-04-03">
      <description><p>UI improvements including resizable code/notes panels, snippet title truncation, folder drag cursor, description field, dark footer bar, and keyboard shortcuts.</p></description>
     </release>
