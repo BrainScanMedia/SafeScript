@@ -25,8 +25,8 @@ desktop.path = /usr/local/share/applications
 desktop.files = safescript.desktop
 INSTALLS += desktop
 
-icon.path = /usr/local/share/icons/hicolor/256x256/apps
-icon.files = safescript.png
+icon.path = /usr/local/share/icons/hicolor/scalable/apps
+icon.files = safescript.svg
 INSTALLS += icon
 
 metainfo.path = /usr/local/share/metainfo
