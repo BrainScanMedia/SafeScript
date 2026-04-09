@@ -42,7 +42,7 @@ To uninstall:
 ```bash
 sudo rm /usr/local/bin/SafeScript
 sudo rm /usr/local/share/applications/safescript.desktop
-sudo rm /usr/share/icons/hicolor/256x256/apps/safescript.png
+sudo rm /usr/local/share/icons/hicolor/scalable/apps/safescript.svg
 sudo rm /usr/local/share/metainfo/com.brainscanmedia.SafeScript.metainfo.xml
 sudo gtk-update-icon-cache -f /usr/share/icons/hicolor/
 sudo update-desktop-database /usr/local/share/applications/
