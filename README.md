@@ -64,5 +64,9 @@ Snippets are saved locally depending on how you installed SafeScript:
 BrainScanMedia.com, Inc.
 [https://www.brainscanmedia.com](https://www.brainscanmedia.com)
 
+## Project Website
+Safe Script
+[https://www.brainscanmedia.com/safescript.php](https://www.brainscanmedia.com/safescript.php)
+
 ## License
 MIT — © BrainScanMedia.com, Inc.
