@@ -21,7 +21,7 @@
   -->
   <!-- transform: scale(0.82) then translate to re-centre in 128×128 -->
   <g
-     transform="matrix(0.82,0,0,0.82,11.52,11.52)"
+     transform="matrix(0.95,0,0,0.95,3.2,3.2)"
      id="g24">
     <!-- Outer body / shadow with lighter border stroke -->
     <path
