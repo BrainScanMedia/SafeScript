@@ -23,6 +23,10 @@
 #include <QMouseEvent>
 #include <QEvent>
 #include <QStatusBar>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QStandardPaths>
+#include <QDateTime>
 
 // ── Custom delegate to draw ≡ drag handle ─────────────────────
 class FolderDelegate : public QStyledItemDelegate {
@@ -176,6 +180,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         }
     }
 
+    // Restore column layout (left + middle + editor split)
+    QString savedSplitter = DatabaseManager::instance().getSetting("SplitterState");
+    if (!savedSplitter.isEmpty())
+        mainSplitter->restoreState(QByteArray::fromBase64(savedSplitter.toLatin1()));
+
     // Center on screen
     QScreen* screen = QGuiApplication::primaryScreen();
     if (screen) {
@@ -297,7 +306,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
 
 // ── Setup UI ──────────────────────────────────────────────────
 void MainWindow::setupUI() {
-    setWindowTitle("SafeScript v1.2.6");
+    setWindowTitle("SafeScript v1.2.7");
     resize(1100, 700);
 
     // ── Footer status bar ─────────────────────────────────
@@ -345,7 +354,6 @@ void MainWindow::setupUI() {
     sidebarWidget = new QWidget;
     sidebarWidget->setLayout(sidebarLayout);
     sidebarWidget->setMinimumWidth(180);
-    sidebarWidget->setMaximumWidth(260);
 
     // ── Snippet List ─────────────────────────────────────
     searchBox = new QLineEdit;
@@ -381,7 +389,6 @@ void MainWindow::setupUI() {
     snippetListWidget = new QWidget;
     snippetListWidget->setLayout(snippetListLayout);
     snippetListWidget->setMinimumWidth(220);
-    snippetListWidget->setMaximumWidth(320);
 
     // ── Editor ───────────────────────────────────────────
     QFont monoFont("Monospace", 12);
@@ -440,17 +447,20 @@ void MainWindow::setupUI() {
 
     QWidget* editorWidget = new QWidget;
     editorWidget->setLayout(editorLayout);
+    editorWidget->setMinimumWidth(250);
 
     // ── Splitter ─────────────────────────────────────────
-    QSplitter* splitter = new QSplitter(Qt::Horizontal);
-    splitter->addWidget(sidebarWidget);
-    splitter->addWidget(snippetListWidget);
-    splitter->addWidget(editorWidget);
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 0);
-    splitter->setStretchFactor(2, 1);
+    mainSplitter = new QSplitter(Qt::Horizontal);
+    mainSplitter->addWidget(sidebarWidget);
+    mainSplitter->addWidget(snippetListWidget);
+    mainSplitter->addWidget(editorWidget);
+    mainSplitter->setStretchFactor(0, 0);
+    mainSplitter->setStretchFactor(1, 0);
+    mainSplitter->setStretchFactor(2, 1);
+    mainSplitter->setChildrenCollapsible(false);   // panes can't be dragged to zero
+    mainSplitter->setSizes({200, 260, 640});        // first-run default; saved state overrides
 
-    setCentralWidget(splitter);
+    setCentralWidget(mainSplitter);
 }
 
 // ── Menu Bar ──────────────────────────────────────────────────
@@ -465,7 +475,7 @@ void MainWindow::setupMenuBar() {
         layout->setContentsMargins(20, 20, 20, 20);
         layout->setSpacing(8);
         QLabel* text = new QLabel(
-            "<b>SafeScript v1.2.6</b><br>"
+            "<b>SafeScript v1.2.7</b><br>"
             "Designed &amp; Programmed By<br>"
             "Thomas J. Allen<br>"
             "Copyright 2025<br>"
@@ -524,6 +534,21 @@ void MainWindow::setupMenuBar() {
         else if (auto* w = qobject_cast<QTextEdit*>(focusWidget()))      w->selectAll();
     });
 
+    editMenu->addSeparator();
+    QAction* saveAction = new QAction("Save Snippet", this);
+    saveAction->setShortcut(QKeySequence::Save);   // Ctrl+S
+    connect(saveAction, &QAction::triggered, this, &MainWindow::onSaveSnippet);
+    editMenu->addAction(saveAction);
+
+    // ── Database menu (backup / import) ──────────────────
+    QMenu* databaseMenu = menuBar()->addMenu("Database");
+
+    QAction* backupAction = databaseMenu->addAction("Backup Database…");
+    connect(backupAction, &QAction::triggered, this, &MainWindow::onBackupDatabase);
+
+    QAction* importAction = databaseMenu->addAction("Import Database…");
+    connect(importAction, &QAction::triggered, this, &MainWindow::onImportDatabase);
+
     QMenu* optionsMenu = menuBar()->addMenu("Options");
 
     wrapAction = new QAction("Wrap Code", this);
@@ -576,6 +601,71 @@ void MainWindow::setupMenuBar() {
     helpMenu->addAction("Visit Our Website", this, [](){
         QDesktopServices::openUrl(QUrl("https://www.brainscanmedia.com"));
     });
+}
+
+// ── Database Slots ────────────────────────────────────────────
+void MainWindow::onBackupDatabase() {
+    QString startDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (startDir.isEmpty())
+        startDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+
+    QString defaultName = QString("safescript-backup-%1.sqlite3")
+                              .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss"));
+
+    QString dest = QFileDialog::getSaveFileName(
+        this, "Backup Database",
+        startDir + "/" + defaultName,
+        "SQLite Database (*.sqlite3 *.db);;All Files (*)");
+    if (dest.isEmpty()) return;
+
+    QString err;
+    if (DatabaseManager::instance().backupTo(dest, &err)) {
+        QMessageBox::information(this, "Backup Complete",
+                                 "Your database was backed up successfully to:\n\n" + dest);
+    } else {
+        QMessageBox::warning(this, "Backup Failed",
+                             err.isEmpty() ? "The backup could not be completed." : err);
+    }
+}
+
+void MainWindow::onImportDatabase() {
+    QString startDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (startDir.isEmpty())
+        startDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+
+    QString src = QFileDialog::getOpenFileName(
+        this, "Import Database",
+        startDir,
+        "SQLite Database (*.sqlite3 *.db);;All Files (*)");
+    if (src.isEmpty()) return;
+
+    // Importing overwrites everything — confirm first.
+    QMessageBox confirm(this);
+    confirm.setWindowTitle("Import Database");
+    confirm.setIcon(QMessageBox::Warning);
+    confirm.setText("Importing will overwrite your current database.");
+    confirm.setInformativeText(
+        "All folders and snippets currently in SafeScript will be replaced by "
+        "the contents of the selected file. This cannot be undone.\n\n"
+        "Consider backing up your current database first.\n\nContinue?");
+    confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
+    confirm.setDefaultButton(QMessageBox::Cancel);
+    if (confirm.exec() != QMessageBox::Yes) return;
+
+    QString err;
+    if (DatabaseManager::instance().importFrom(src, &err)) {
+        // Reload the whole UI from the freshly imported database.
+        currentFolderID  = -1;
+        currentSnippetID = -1;
+        snippetList->clear();
+        clearEditor();
+        loadFolders();
+        QMessageBox::information(this, "Import Complete",
+                                 "The database was imported successfully.");
+    } else {
+        QMessageBox::warning(this, "Import Failed",
+                             err.isEmpty() ? "The database could not be imported." : err);
+    }
 }
 
 // ── Option Slots ──────────────────────────────────────────────
@@ -820,6 +910,7 @@ void MainWindow::populateEditor(const Snippet& s) {
 void MainWindow::closeEvent(QCloseEvent* event) {
     DatabaseManager::instance().saveSetting("WindowSize",
                                             QString("%1x%2").arg(width()).arg(height()));
+    DatabaseManager::instance().saveSetting("SplitterState",
+                                            QString::fromLatin1(mainSplitter->saveState().toBase64()));
     event->accept();
 }
-

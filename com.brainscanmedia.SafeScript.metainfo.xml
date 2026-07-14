@@ -38,6 +38,11 @@
    </screenshot>
   </screenshots>
   <releases>
+    <release version="1.2.7" date="2026-07-14">
+     <description>
+      <p>Added database backup and import, Ctrl+S to save the current snippet, and the app now remembers column widths between sessions.</p>
+     </description>
+    </release>
     <release version="1.2.6" date="2026-04-04">
      <description><p>Fixed description field not updating in memory after save.</p></description>
     </release>

@@ -123,6 +123,8 @@ private slots:
     void onToggleLineNumbers();
     void onBlockCountChanged();
     void onUpdateRequest(const QRect& rect, int dy);
+    void onBackupDatabase();
+    void onImportDatabase();
 
 private:
     void setupUI();
@@ -165,6 +167,7 @@ private:
     // Panels
     QWidget*        sidebarWidget;
     QWidget*        snippetListWidget;
+    QSplitter*      mainSplitter;
 
     int currentFolderID  = -1;
     int currentSnippetID = -1;

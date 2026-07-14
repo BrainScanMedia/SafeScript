@@ -23,6 +23,18 @@ public:
     static DatabaseManager& instance();
     bool open();
 
+    // Path to the live database file currently in use
+    QString databasePath() const;
+
+    // Copy the current database to destPath (backup).
+    // Returns false and fills errorMessage on failure.
+    bool backupTo(const QString& destPath, QString* errorMessage = nullptr);
+
+    // Replace the current database with the file at srcPath (import).
+    // Validates the source first and rolls back on failure.
+    // Returns false and fills errorMessage on failure.
+    bool importFrom(const QString& srcPath, QString* errorMessage = nullptr);
+
     // Folders
     QList<Folder> fetchFolders();
     int insertFolder(const QString& name);
@@ -43,5 +55,11 @@ public:
 private:
     DatabaseManager() {}
     void createTablesIfNeeded();
+
+    bool openConnection();
+    void closeConnection();
+    bool isValidDatabase(const QString& path, QString* errorMessage = nullptr);
+
     QSqlDatabase db;
+    QString dbPath;
 };
