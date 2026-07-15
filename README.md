@@ -6,12 +6,26 @@ A clean, fast code snippet manager for Linux built with Qt6.
 ![SafeScript Dark Mode](screenshot-dark.png)
 
 ## Features
-- Organize snippets into folders
-- Syntax-aware code editor with line numbers
+- Organize snippets into folders with drag-to-reorder
+- Syntax-aware code editor with optional line numbers
 - Notes field for each snippet
 - Dark and light mode
 - Search snippets instantly
-- Data stored locally in SQLite
+- Backup your database to any location, and import one to restore or migrate
+- Remembers your layout — window size, column widths, and the code/notes divider
+- Reopens the last folder and snippet you were working on
+- Keyboard shortcuts for creating and saving snippets
+- Data stored locally in SQLite — nothing leaves your device
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+N` | New snippet in the selected folder |
+| `Ctrl+S` | Save the current snippet |
+| `Ctrl+X` / `Ctrl+C` / `Ctrl+V` | Cut / Copy / Paste |
+| `Ctrl+A` | Select all |
+| `Ctrl+Q` | Quit |
 
 ## Installation
 
@@ -60,13 +74,21 @@ Snippets are saved locally depending on how you installed SafeScript:
 **Build from source:**
 `~/.local/share/BrainScanMedia/SafeScript/storage.sqlite3`
 
+### Backup and Import
+
+Use **Database → Backup Database** to save a copy of your snippets anywhere on disk, and **Database → Import Database** to load one back in.
+
+Importing replaces your current database entirely, so SafeScript will ask you to confirm first. The selected file is validated before anything is overwritten, and your existing data is restored automatically if the import fails.
+
+This is also the recommended way to move your snippets between the Flatpak and source builds, since each uses its own storage location.
+
+## Preferences
+
+The **Options** menu controls code wrapping, line numbers, and dark mode. Your layout — window size, column widths, and the code/notes divider — is saved automatically when you exit. **Options → Reset Window Size** restores the default layout without touching your snippets.
+
 ## Developer
 BrainScanMedia.com, Inc.
 [https://www.brainscanmedia.com](https://www.brainscanmedia.com)
-
-## Project Website
-Safe Script
-[https://www.brainscanmedia.com/safescript.php](https://www.brainscanmedia.com/safescript.php)
 
 ## License
 MIT — © BrainScanMedia.com, Inc.
