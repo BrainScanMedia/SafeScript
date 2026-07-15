@@ -38,6 +38,11 @@
    </screenshot>
   </screenshots>
   <releases>
+    <release version="1.2.8" date="2026-07-14">
+      <description>
+        <p>Added Ctrl+N shortcut for new snippet, the app now reopens the last folder and snippet you were viewing, the code and notes divider position is remembered, and a Reset Window Size option was added.</p>
+      </description>
+    </release>
     <release version="1.2.7" date="2026-07-14">
      <description>
       <p>Added database backup and import, Ctrl+S to save the current snippet, and the app now remembers column widths between sessions.</p>

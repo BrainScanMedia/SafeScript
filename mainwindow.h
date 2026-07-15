@@ -125,6 +125,7 @@ private slots:
     void onUpdateRequest(const QRect& rect, int dy);
     void onBackupDatabase();
     void onImportDatabase();
+    void onResetWindowSize();
 
 private:
     void setupUI();
@@ -134,6 +135,7 @@ private:
     void clearEditor();
     void populateEditor(const Snippet& s);
     void applyThemeStyles(bool dark);
+    void restoreLastSelection();
 
     // Sidebar
     QListWidget*    folderList;
@@ -168,6 +170,7 @@ private:
     QWidget*        sidebarWidget;
     QWidget*        snippetListWidget;
     QSplitter*      mainSplitter;
+    QSplitter*      editorSplitter;
 
     int currentFolderID  = -1;
     int currentSnippetID = -1;

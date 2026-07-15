@@ -185,6 +185,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (!savedSplitter.isEmpty())
         mainSplitter->restoreState(QByteArray::fromBase64(savedSplitter.toLatin1()));
 
+    // Restore the code / notes divider inside the editor pane
+    QString savedEditorSplitter = DatabaseManager::instance().getSetting("EditorSplitterState");
+    if (!savedEditorSplitter.isEmpty())
+        editorSplitter->restoreState(QByteArray::fromBase64(savedEditorSplitter.toLatin1()));
+
+    // Restore the folder + snippet that were open last session
+    restoreLastSelection();
+
     // Center on screen
     QScreen* screen = QGuiApplication::primaryScreen();
     if (screen) {
@@ -194,6 +202,37 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->setStyleSheet(darkModeEnabled
                                    ? "QStatusBar { background-color: #2a2a2a; border-top: 2px solid #3a3a3a; }"
                                    : "QStatusBar { background-color: #cccccc; border-top: 2px solid #bbbbbb; }");
+}
+
+// ── Restore last opened folder / snippet ──────────────────────
+// Called once at startup, after loadFolders() has populated the sidebar.
+// Silently does nothing if the saved IDs no longer exist (deleted, or a
+// different database was imported), leaving the default first-row selection.
+void MainWindow::restoreLastSelection() {
+    int lastFolder = DatabaseManager::instance().getSetting("LastFolderID", "-1").toInt();
+    if (lastFolder < 0) return;
+
+    bool folderFound = false;
+    for (int i = 0; i < folderList->count(); ++i) {
+        if (folderList->item(i)->data(Qt::UserRole).toInt() == lastFolder) {
+            // Selecting the row fires onFolderSelected(), which loads its snippets.
+            folderList->setCurrentRow(i);
+            folderFound = true;
+            break;
+        }
+    }
+    if (!folderFound) return;
+
+    int lastSnippet = DatabaseManager::instance().getSetting("LastSnippetID", "-1").toInt();
+    if (lastSnippet < 0) return;
+
+    for (int i = 0; i < snippetList->count(); ++i) {
+        if (snippetList->item(i)->data(Qt::UserRole).toInt() == lastSnippet) {
+            snippetList->setCurrentRow(i);
+            snippetList->scrollToItem(snippetList->item(i));
+            break;
+        }
+    }
 }
 
 // ── Theme ─────────────────────────────────────────────────────
@@ -306,7 +345,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
 
 // ── Setup UI ──────────────────────────────────────────────────
 void MainWindow::setupUI() {
-    setWindowTitle("SafeScript v1.2.7");
+    setWindowTitle("SafeScript v1.2.8");
     resize(1100, 700);
 
     // ── Footer status bar ─────────────────────────────────
@@ -425,7 +464,7 @@ void MainWindow::setupUI() {
     connect(btnSave, &QPushButton::clicked, this, &MainWindow::onSaveSnippet);
 
     // ── Editor splitter for code/notes ───────────────────
-    QSplitter* editorSplitter = new QSplitter(Qt::Vertical);
+    editorSplitter = new QSplitter(Qt::Vertical);
     editorSplitter->addWidget(codeEditor);
 
     QWidget* notesWidget = new QWidget;
@@ -436,6 +475,7 @@ void MainWindow::setupUI() {
     editorSplitter->addWidget(notesWidget);
     editorSplitter->setStretchFactor(0, 3);
     editorSplitter->setStretchFactor(1, 1);
+    editorSplitter->setChildrenCollapsible(false);   // code/notes can't be dragged to zero
 
     QVBoxLayout* editorLayout = new QVBoxLayout;
     editorLayout->setContentsMargins(8, 8, 8, 8);
@@ -475,7 +515,7 @@ void MainWindow::setupMenuBar() {
         layout->setContentsMargins(20, 20, 20, 20);
         layout->setSpacing(8);
         QLabel* text = new QLabel(
-            "<b>SafeScript v1.2.7</b><br>"
+            "<b>SafeScript v1.2.8</b><br>"
             "Designed &amp; Programmed By<br>"
             "Thomas J. Allen<br>"
             "Copyright 2025<br>"
@@ -535,6 +575,11 @@ void MainWindow::setupMenuBar() {
     });
 
     editMenu->addSeparator();
+    QAction* newSnippetAction = new QAction("New Snippet", this);
+    newSnippetAction->setShortcut(QKeySequence::New);   // Ctrl+N
+    connect(newSnippetAction, &QAction::triggered, this, &MainWindow::onNewSnippet);
+    editMenu->addAction(newSnippetAction);
+
     QAction* saveAction = new QAction("Save Snippet", this);
     saveAction->setShortcut(QKeySequence::Save);   // Ctrl+S
     connect(saveAction, &QAction::triggered, this, &MainWindow::onSaveSnippet);
@@ -565,6 +610,11 @@ void MainWindow::setupMenuBar() {
     darkModeAction->setCheckable(true);
     connect(darkModeAction, &QAction::triggered, this, &MainWindow::onToggleDarkMode);
     optionsMenu->addAction(darkModeAction);
+
+    optionsMenu->addSeparator();
+    QAction* resetLayoutAction = new QAction("Reset Window Size", this);
+    connect(resetLayoutAction, &QAction::triggered, this, &MainWindow::onResetWindowSize);
+    optionsMenu->addAction(resetLayoutAction);
 
     QMenu* helpMenu = menuBar()->addMenu("Help");
     helpMenu->addAction("Storage Location", this, [this](){
@@ -689,6 +739,34 @@ void MainWindow::onToggleLineNumbers() {
     codeEditor->updateLineNumberAreaWidth();
     lineNumberArea->update();
     DatabaseManager::instance().saveSetting("LineNumbers", lineNumbersEnabled ? "on" : "off");
+}
+
+// Restores the default window size, column widths and code/notes divider,
+// and clears the saved layout so nothing stale comes back on next launch.
+// Does not touch snippets, folders, or the Wrap/Dark/Line Numbers options.
+void MainWindow::onResetWindowSize() {
+    // Default window size (matches setupUI)
+    resize(1100, 700);
+
+    // Default column widths (matches setupUI)
+    mainSplitter->setSizes({200, 260, 640});
+
+    // Default code / notes divider — 3:1, same ratio as the stretch factors
+    int h = editorSplitter->height();
+    if (h < 100) h = 500;            // fallback if not laid out yet
+    editorSplitter->setSizes({ h * 3 / 4, h / 4 });
+
+    // Clear the stored layout values
+    DatabaseManager::instance().saveSetting("WindowSize", "");
+    DatabaseManager::instance().saveSetting("SplitterState", "");
+    DatabaseManager::instance().saveSetting("EditorSplitterState", "");
+
+    // Re-center on screen
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen) {
+        QRect geo = screen->availableGeometry();
+        move((geo.width() - width()) / 2, (geo.height() - height()) / 2);
+    }
 }
 
 // ── Folder Slots ──────────────────────────────────────────────
@@ -912,5 +990,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
                                             QString("%1x%2").arg(width()).arg(height()));
     DatabaseManager::instance().saveSetting("SplitterState",
                                             QString::fromLatin1(mainSplitter->saveState().toBase64()));
+    DatabaseManager::instance().saveSetting("EditorSplitterState",
+                                            QString::fromLatin1(editorSplitter->saveState().toBase64()));
+    // Remember which folder / snippet was open so we can restore it next launch
+    DatabaseManager::instance().saveSetting("LastFolderID",  QString::number(currentFolderID));
+    DatabaseManager::instance().saveSetting("LastSnippetID", QString::number(currentSnippetID));
     event->accept();
 }

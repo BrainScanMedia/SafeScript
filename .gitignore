@@ -7,3 +7,5 @@ Makefile
 SafeScript
 SafeScript_en_US.ts
 build/
+.qtcreator/
+SafeScript.pro.user
