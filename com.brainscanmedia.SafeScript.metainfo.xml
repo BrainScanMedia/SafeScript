@@ -38,6 +38,11 @@
    </screenshot>
   </screenshots>
   <releases>
+    <release version="1.2.9" date="2026-07-31">
+      <description>
+        <p>A big feature update: a Copy Code button, a Find and Replace bar (Ctrl+F), favorites, snippet cloning, moving snippets between folders, and exporting snippets or whole folders to files. Search now looks inside code and notes, not just titles. Drag a file onto the window to turn it into a snippet. Added adjustable editor font size, a current-line highlight, and a status line showing line and character counts and when a snippet was last modified. SafeScript now warns before discarding unsaved edits.</p>
+      </description>
+    </release>
     <release version="1.2.8" date="2026-07-14">
       <description>
         <p>Added Ctrl+N shortcut for new snippet, the app now reopens the last folder and snippet you were viewing, the code and notes divider position is remembered, and a Reset Window Size option was added.</p>

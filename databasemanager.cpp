@@ -3,8 +3,14 @@
 #include <QDir>
 #include <QFile>
 #include <QDebug>
+#include <QDateTime>
 #include <QtSql/QSqlQuery>
 #include <QtSql/QSqlError>
+
+// Current local time as an ISO-8601 string, used for Created/Modified stamps.
+static QString nowIso() {
+    return QDateTime::currentDateTime().toString(Qt::ISODate);
+}
 
 DatabaseManager& DatabaseManager::instance() {
     static DatabaseManager mgr;
@@ -174,17 +180,51 @@ void DatabaseManager::createTablesIfNeeded() {
            "SortBy INTEGER,"
            "Folder TEXT)");
 
+    // Fresh databases get the full column set here; existing ones are brought
+    // up to date by runMigrations() below.
     q.exec("CREATE TABLE IF NOT EXISTS snippets ("
            "RecID INTEGER PRIMARY KEY AUTOINCREMENT,"
            "FolderID INTEGER,"
            "SnippetTitle TEXT,"
            "SnippetDesc TEXT,"
            "SnippetCode TEXT,"
-           "SnippetNote TEXT)");
+           "SnippetNote TEXT,"
+           "Favorite INTEGER DEFAULT 0,"
+           "Created TEXT,"
+           "Modified TEXT)");
 
     q.exec("CREATE TABLE IF NOT EXISTS settings ("
            "Key TEXT PRIMARY KEY,"
            "Value TEXT)");
+
+    runMigrations();
+}
+
+// Returns true if the given table already has the given column.
+bool DatabaseManager::tableHasColumn(const QString& table, const QString& column) {
+    QSqlQuery q;
+    q.exec(QString("PRAGMA table_info(%1)").arg(table));
+    while (q.next()) {
+        if (q.value(1).toString().compare(column, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Idempotent, additive-only migrations. Safe to run on every startup: each step
+// checks whether it is already applied. New columns are added with ALTER TABLE
+// so databases created by older versions upgrade in place without data loss.
+void DatabaseManager::runMigrations() {
+    QSqlQuery q;
+    if (!tableHasColumn("snippets", "Favorite"))
+        q.exec("ALTER TABLE snippets ADD COLUMN Favorite INTEGER DEFAULT 0");
+    if (!tableHasColumn("snippets", "Created"))
+        q.exec("ALTER TABLE snippets ADD COLUMN Created TEXT");
+    if (!tableHasColumn("snippets", "Modified"))
+        q.exec("ALTER TABLE snippets ADD COLUMN Modified TEXT");
+
+    // Record the schema version for future reference.
+    saveSetting("SchemaVersion", "2");
 }
 
 QList<Folder> DatabaseManager::fetchFolders() {
@@ -233,37 +273,66 @@ void DatabaseManager::updateFolderSortOrder(int folderID, int sortOrder) {
 QList<Snippet> DatabaseManager::fetchSnippets(int folderID) {
     QList<Snippet> list;
     QSqlQuery q;
-    q.prepare("SELECT RecID, FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote "
-              "FROM snippets WHERE FolderID = ? ORDER BY SnippetTitle ASC");
+    // Favorites float to the top; ties break alphabetically, case-insensitively.
+    q.prepare("SELECT RecID, FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote, "
+              "COALESCE(Favorite, 0), Created, Modified "
+              "FROM snippets WHERE FolderID = ? "
+              "ORDER BY COALESCE(Favorite, 0) DESC, SnippetTitle COLLATE NOCASE ASC");
     q.addBindValue(folderID);
     q.exec();
     while (q.next()) {
-        list.append({
-            q.value(0).toInt(), q.value(1).toInt(),
-            q.value(2).toString(), q.value(3).toString(),
-            q.value(4).toString(), q.value(5).toString()
-        });
+        Snippet s;
+        s.id          = q.value(0).toInt();
+        s.folderID    = q.value(1).toInt();
+        s.title       = q.value(2).toString();
+        s.description = q.value(3).toString();
+        s.code        = q.value(4).toString();
+        s.note        = q.value(5).toString();
+        s.favorite    = q.value(6).toInt() != 0;
+        s.created     = q.value(7).toString();
+        s.modified    = q.value(8).toString();
+        list.append(s);
     }
     return list;
 }
 
 int DatabaseManager::insertSnippet(int folderID) {
+    const QString now = nowIso();
     QSqlQuery q;
-    q.prepare("INSERT INTO snippets (FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote) "
-              "VALUES (?, '', '', '', '')");
+    q.prepare("INSERT INTO snippets "
+              "(FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote, Favorite, Created, Modified) "
+              "VALUES (?, '', '', '', '', 0, ?, ?)");
     q.addBindValue(folderID);
+    q.addBindValue(now);
+    q.addBindValue(now);
+    q.exec();
+    return q.lastInsertId().toInt();
+}
+
+int DatabaseManager::insertSnippet(int folderID, const QString& title, const QString& code) {
+    const QString now = nowIso();
+    QSqlQuery q;
+    q.prepare("INSERT INTO snippets "
+              "(FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote, Favorite, Created, Modified) "
+              "VALUES (?, ?, '', ?, '', 0, ?, ?)");
+    q.addBindValue(folderID);
+    q.addBindValue(title);
+    q.addBindValue(code);
+    q.addBindValue(now);
+    q.addBindValue(now);
     q.exec();
     return q.lastInsertId().toInt();
 }
 
 void DatabaseManager::updateSnippet(const Snippet& s) {
     QSqlQuery q;
-    q.prepare("UPDATE snippets SET SnippetTitle=?, SnippetDesc=?, SnippetCode=?, SnippetNote=? "
-              "WHERE RecID=?");
+    q.prepare("UPDATE snippets SET SnippetTitle=?, SnippetDesc=?, SnippetCode=?, SnippetNote=?, "
+              "Modified=? WHERE RecID=?");
     q.addBindValue(s.title);
     q.addBindValue(s.description);
     q.addBindValue(s.code);
     q.addBindValue(s.note);
+    q.addBindValue(nowIso());
     q.addBindValue(s.id);
     q.exec();
 }
@@ -271,6 +340,54 @@ void DatabaseManager::updateSnippet(const Snippet& s) {
 void DatabaseManager::deleteSnippet(int id) {
     QSqlQuery q;
     q.prepare("DELETE FROM snippets WHERE RecID = ?");
+    q.addBindValue(id);
+    q.exec();
+}
+
+// Duplicates a snippet inside its own folder. The copy is never a favorite and
+// gets fresh timestamps; its title has " (copy)" appended.
+int DatabaseManager::cloneSnippet(int id) {
+    QSqlQuery q;
+    q.prepare("SELECT FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote "
+              "FROM snippets WHERE RecID = ?");
+    q.addBindValue(id);
+    q.exec();
+    if (!q.next()) return -1;
+
+    int folderID       = q.value(0).toInt();
+    QString title      = q.value(1).toString();
+    QString desc       = q.value(2).toString();
+    QString code       = q.value(3).toString();
+    QString note       = q.value(4).toString();
+    const QString now  = nowIso();
+
+    QSqlQuery ins;
+    ins.prepare("INSERT INTO snippets "
+                "(FolderID, SnippetTitle, SnippetDesc, SnippetCode, SnippetNote, Favorite, Created, Modified) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?, ?)");
+    ins.addBindValue(folderID);
+    ins.addBindValue(title.isEmpty() ? QString("Untitled (copy)") : title + " (copy)");
+    ins.addBindValue(desc);
+    ins.addBindValue(code);
+    ins.addBindValue(note);
+    ins.addBindValue(now);
+    ins.addBindValue(now);
+    ins.exec();
+    return ins.lastInsertId().toInt();
+}
+
+void DatabaseManager::moveSnippet(int id, int newFolderID) {
+    QSqlQuery q;
+    q.prepare("UPDATE snippets SET FolderID = ? WHERE RecID = ?");
+    q.addBindValue(newFolderID);
+    q.addBindValue(id);
+    q.exec();
+}
+
+void DatabaseManager::setSnippetFavorite(int id, bool favorite) {
+    QSqlQuery q;
+    q.prepare("UPDATE snippets SET Favorite = ? WHERE RecID = ?");
+    q.addBindValue(favorite ? 1 : 0);
     q.addBindValue(id);
     q.exec();
 }

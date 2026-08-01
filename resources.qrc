@@ -2,5 +2,6 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file>safescript.svg</file>
+        <file>safescript.png</file>
     </qresource>
 </RCC>

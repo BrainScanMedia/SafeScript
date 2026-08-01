@@ -16,6 +16,9 @@ struct Snippet {
     QString description;
     QString code;
     QString note;
+    bool    favorite = false;
+    QString created;    // ISO 8601 local time; empty for legacy rows
+    QString modified;   // ISO 8601 local time; empty for legacy rows
 };
 
 class DatabaseManager {
@@ -45,8 +48,12 @@ public:
     // Snippets
     QList<Snippet> fetchSnippets(int folderID);
     int insertSnippet(int folderID);
+    int insertSnippet(int folderID, const QString& title, const QString& code);
     void updateSnippet(const Snippet& snippet);
     void deleteSnippet(int id);
+    int  cloneSnippet(int id);                       // duplicates within the same folder; returns new id
+    void moveSnippet(int id, int newFolderID);
+    void setSnippetFavorite(int id, bool favorite);
 
     // Settings
     void saveSetting(const QString& key, const QString& value);
@@ -55,6 +62,8 @@ public:
 private:
     DatabaseManager() {}
     void createTablesIfNeeded();
+    void runMigrations();               // adds columns to pre-existing databases as the schema grows
+    bool tableHasColumn(const QString& table, const QString& column);
 
     bool openConnection();
     void closeConnection();

@@ -18,13 +18,35 @@
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QEvent>
+#include <QCheckBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include "databasemanager.h"
 
 // ── CodeEditor subclass exposes protected methods for line numbers ──
 class CodeEditor : public QPlainTextEdit {
     Q_OBJECT
 public:
-    explicit CodeEditor(QWidget* parent = nullptr) : QPlainTextEdit(parent) {}
+    explicit CodeEditor(QWidget* parent = nullptr) : QPlainTextEdit(parent) {
+        // Keep the current-line highlight in sync with the caret.
+        connect(this, &QPlainTextEdit::cursorPositionChanged,
+                this, &CodeEditor::highlightCurrentLine);
+        highlightCurrentLine();
+    }
+
+    // Paints a full-width tint behind the line the caret is on. In dark mode the
+    // tint is a touch lighter than the near-black background; in light mode it is
+    // a touch darker than white.
+    void highlightCurrentLine() {
+        QList<QTextEdit::ExtraSelection> extras;
+        QTextEdit::ExtraSelection sel;
+        sel.format.setBackground(darkMode ? QColor(45, 45, 45) : QColor(236, 236, 236));
+        sel.format.setProperty(QTextFormat::FullWidthSelection, true);
+        sel.cursor = textCursor();
+        sel.cursor.clearSelection();
+        extras.append(sel);
+        setExtraSelections(extras);
+    }
 
     int lineNumberAreaWidth() {
         int digits = 1;
@@ -107,6 +129,8 @@ public:
 protected:
     void closeEvent(QCloseEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     void onNewFolder();
@@ -117,6 +141,7 @@ private slots:
     void onDeleteSnippet();
     void onSnippetSelected(QListWidgetItem* current, QListWidgetItem* previous);
     void onSaveSnippet();
+    void onCopyCode();
     void onSearchTextChanged(const QString& text);
     void onToggleWrap();
     void onToggleDarkMode();
@@ -126,16 +151,56 @@ private slots:
     void onBackupDatabase();
     void onImportDatabase();
     void onResetWindowSize();
+    void markDirty();
+
+    // Snippet actions
+    void onCloneSnippet();
+    void onToggleFavorite();
+    void onSnippetContextMenu(const QPoint& pos);
+
+    // Export
+    void onExportSnippet();
+    void onExportFolder();
+
+    // Font size
+    void onIncreaseFont();
+    void onDecreaseFont();
+    void onResetFont();
+
+    // Find / replace
+    void onShowFindBar();
+    void onHideFindBar();
+    void onFindNext();
+    void onReplaceOne();
+    void onReplaceAll();
+
+    // Status line
+    void updateStatusInfo();
 
 private:
     void setupUI();
     void setupMenuBar();
     void loadFolders();
-    void loadSnippets(int folderID);
+    void loadSnippets(int folderID, int selectSnippetID = -1);
+    void resortSnippetList();   // re-orders the list in place (favorites first, then title) without touching the editor
     void clearEditor();
     void populateEditor(const Snippet& s);
     void applyThemeStyles(bool dark);
     void restoreLastSelection();
+
+    // Feature helpers
+    void applyEditorFont();
+    void moveSnippetToFolder(int targetFolderID);
+    void createSnippetFromFile(const QString& path);
+    bool exportSnippetToPath(const QString& code, const QString& path);
+    QString relativeTime(const QString& iso) const;
+    const Snippet* currentSnippet() const;   // in-memory record for currentSnippetID, or nullptr
+
+    // Unsaved-changes handling
+    void setDirty(bool dirty);
+    void saveCurrentSnippet();   // writes the editor to the DB with no confirmation dialog
+    bool maybeSave();            // returns false only if the user cancels the pending action
+    int  promptUnsaved();        // returns a QMessageBox::StandardButton value (Save/Discard/Cancel)
 
     // Sidebar
     QListWidget*    folderList;
@@ -156,7 +221,17 @@ private:
     CodeEditor*     codeEditor;
     LineNumberArea* lineNumberArea;
     QTextEdit*      noteEditor;
+    QPushButton*    btnCopyCode;
     QPushButton*    btnSave;
+
+    // Find / replace bar
+    QWidget*        findBar;
+    QLineEdit*      findField;
+    QLineEdit*      replaceField;
+    QCheckBox*      findCaseCheck;
+
+    // Status line
+    QLabel*         statusInfoLabel;
 
     // Options
     QAction*        wrapAction;
@@ -175,4 +250,11 @@ private:
     int currentFolderID  = -1;
     int currentSnippetID = -1;
     QList<Snippet> currentSnippets;
+
+    // Editor state flags
+    bool dirty          = false;   // editor has unsaved changes for the current snippet
+    bool loadingSnippet = false;   // suppresses dirty-marking while populating fields programmatically
+    bool rebuildingList = false;   // suppresses the unsaved-changes guard during programmatic list rebuilds
+
+    int  editorFontSize = 12;      // point size for the code and notes editors
 };
