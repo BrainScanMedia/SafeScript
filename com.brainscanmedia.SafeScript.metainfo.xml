@@ -36,6 +36,18 @@
     <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-dark.png</image>
     <caption>SafeScript in dark mode showing code snippets</caption>
    </screenshot>
+   <screenshot>
+    <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-midnightblue.png</image>
+    <caption>SafeScript using the Midnight Blue color scheme</caption>
+   </screenshot>
+   <screenshot>
+    <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-forest.png</image>
+    <caption>SafeScript using the Forest color scheme</caption>
+   </screenshot>
+   <screenshot>
+    <image>https://raw.githubusercontent.com/BrainScanMedia/SafeScript/main/screenshot-nord.png</image>
+    <caption>SafeScript using the Nord color scheme</caption>
+   </screenshot>
   </screenshots>
   <releases>
     <release version="1.3.0" date="2026-11-14">

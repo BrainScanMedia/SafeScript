@@ -5,5 +5,8 @@
         <file>safescript.png</file>
         <file>screenshot-light.png</file>
         <file>screenshot-dark.png</file>
+        <file>screenshot-midnightblue.png</file>
+        <file>screenshot-forest.png</file>
+        <file>screenshot-nord.png</file>
     </qresource>
 </RCC>

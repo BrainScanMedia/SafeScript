@@ -323,7 +323,7 @@ protected:
         QMenu::paintEvent(event);
         const bool dark = palette().color(QPalette::Window).lightness() < 128;
         QPainter painter(this);
-        painter.setPen(dark ? QColor("#1a1a1a") : QColor("#cccccc"));
+        painter.setPen(dark ? palette().color(QPalette::Window).lighter(165) : QColor("#dddddd"));
         for (auto* item : actions()) {
             if (!item->isSeparator()) continue;
             const QRect separator = actionGeometry(item);
@@ -1215,7 +1215,10 @@ void MainWindow::applyThemeStyles() {
         codeEditor->gutterBackground = editorColor.darker(dark ? 150 : 114);
         const QColor textColor(scheme->text);
         codeEditor->gutterForeground = dark ? textColor.darker(140) : textColor;
-        chromeStyle += QStringLiteral("QMenuBar { background-color: %1; }").arg(chrome.name());
+        chromeStyle += QStringLiteral(
+            "QMenuBar { background-color: %1; }"
+            "QMenu { background-color: %2; }"
+        ).arg(chrome.name(), titleBackground.name());
         statusBar()->setStyleSheet(QStringLiteral("QStatusBar { background-color: %1; border-top: 2px solid %2; }")
                                       .arg(chrome.name(), scheme->border));
     }
@@ -1975,6 +1978,9 @@ void MainWindow::setupMenuBar() {
         };
         addPreview("Light Mode", ":/screenshot-light.png");
         addPreview("Dark Mode", ":/screenshot-dark.png");
+        addPreview("Midnight Blue", ":/screenshot-midnightblue.png");
+        addPreview("Forest", ":/screenshot-forest.png");
+        addPreview("Nord", ":/screenshot-nord.png");
         tabs->setCurrentIndex(darkModeEnabled ? 1 : 0);
         dialog.body->addWidget(tabs);
 

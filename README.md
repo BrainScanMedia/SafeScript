@@ -5,6 +5,17 @@ A clean, fast code snippet manager for Linux built with Qt6.
 ![SafeScript Light Mode](screenshot-light.png)
 ![SafeScript Dark Mode](screenshot-dark.png)
 
+<details>
+<summary>Color scheme screenshots</summary>
+
+![SafeScript Midnight Blue](screenshot-midnightblue.png)
+
+![SafeScript Forest](screenshot-forest.png)
+
+![SafeScript Nord](screenshot-nord.png)
+
+</details>
+
 ## What's new in 1.3.0
 
 - **Snippet menu** for creating, saving, cloning, importing, exporting, and favoriting snippets. Import text and source files from the file picker or drop them into the selected category.
