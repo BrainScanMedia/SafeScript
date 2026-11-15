@@ -3,5 +3,7 @@
     <qresource prefix="/">
         <file>safescript.svg</file>
         <file>safescript.png</file>
+        <file>screenshot-light.png</file>
+        <file>screenshot-dark.png</file>
     </qresource>
 </RCC>

@@ -1,4 +1,5 @@
 #include <QToolButton>
+#include <QTabWidget>
 #include <QWindow>
 #include <QCollator>
 #include <QRegularExpression>
@@ -1957,6 +1958,30 @@ void MainWindow::setupMenuBar() {
         btnRow->addWidget(ok);
         layout->addLayout(btnRow);
         dlg.exec();
+    });
+    helpMenu->addAction(menuIcon("image-x-generic", QStyle::SP_FileIcon), "Screenshots…", this, [this]() {
+        PopupDialog dialog(this, "SafeScript Screenshots");
+        auto* tabs = new QTabWidget;
+        const QSize available = screen()->availableGeometry().size();
+        const QSize previewSize(qMax(1, qMin(1100, available.width() - 72)),
+                                qMax(1, available.height() - 140));
+        const auto addPreview = [tabs, previewSize](const QString& title, const QString& path) {
+            auto* preview = new QLabel;
+            preview->setAlignment(Qt::AlignCenter);
+            preview->setAccessibleName(title + " screenshot");
+            preview->setPixmap(QPixmap(path).scaled(previewSize, Qt::KeepAspectRatio,
+                                                    Qt::SmoothTransformation));
+            tabs->addTab(preview, title);
+        };
+        addPreview("Light Mode", ":/screenshot-light.png");
+        addPreview("Dark Mode", ":/screenshot-dark.png");
+        tabs->setCurrentIndex(darkModeEnabled ? 1 : 0);
+        dialog.body->addWidget(tabs);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        dialog.body->addWidget(buttons);
+        dialog.exec();
     });
     helpMenu->addSeparator();
     helpMenu->addAction(menuIcon("internet-web-browser", QStyle::SP_DriveNetIcon), "Project Website", this, []() {
