@@ -5,16 +5,13 @@ A clean, fast code snippet manager for Linux built with Qt6.
 ![SafeScript Light Mode](screenshot-light.png)
 ![SafeScript Dark Mode](screenshot-dark.png)
 
-<details>
-<summary>Color scheme screenshots</summary>
+## Color scheme screenshots
 
 ![SafeScript Midnight Blue](screenshot-midnightblue.png)
 
 ![SafeScript Forest](screenshot-forest.png)
 
 ![SafeScript Nord](screenshot-nord.png)
-
-</details>
 
 ## What's new in 1.3.0
 
