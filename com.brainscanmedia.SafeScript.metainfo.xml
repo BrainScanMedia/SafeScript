@@ -38,6 +38,12 @@
    </screenshot>
   </screenshots>
   <releases>
+    <release version="1.3.0" date="2026-11-14">
+      <description>
+        <p>Import files into the current category, edit multiple lines or occurrences, sort lines naturally, convert case, and clean up code with reviewable changes.</p>
+        <p>Choose from nine color schemes, set a monospaced font and line height, and show or hide Description and Notes independently. The interface adds themed window controls, rounded dialogs, and a Favorite button.</p>
+      </description>
+    </release>
     <release version="1.2.9" date="2026-07-31">
       <description>
         <p>A big feature update: a Copy Code button, a Find and Replace bar (Ctrl+F), favorites, snippet cloning, moving snippets between folders, and exporting snippets or whole folders to files. Search now looks inside code and notes, not just titles. Drag a file onto the window to turn it into a snippet. Added adjustable editor font size, a current-line highlight, and a status line showing line and character counts and when a snippet was last modified. SafeScript now warns before discarding unsaved edits.</p>

@@ -6,6 +6,7 @@
 #include <QTextEdit>
 #include <QPlainTextEdit>
 #include <QTextBlock>
+#include <QTextLayout>
 #include <QTextDocument>
 #include <QLabel>
 #include <QPushButton>
@@ -18,6 +19,7 @@
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QEvent>
+#include <QKeyEvent>
 #include <QCheckBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -27,12 +29,14 @@
 class CodeEditor : public QPlainTextEdit {
     Q_OBJECT
 public:
-    explicit CodeEditor(QWidget* parent = nullptr) : QPlainTextEdit(parent) {
-        // Keep the current-line highlight in sync with the caret.
-        connect(this, &QPlainTextEdit::cursorPositionChanged,
-                this, &CodeEditor::highlightCurrentLine);
-        highlightCurrentLine();
-    }
+    explicit CodeEditor(QWidget* parent = nullptr);
+    void setLineSpacing(int pixels);
+
+    void sortLines(Qt::CaseSensitivity sensitivity);
+    void convertCase(QString (*convert)(const QString&));
+    void selectNextOccurrence();
+    void splitSelectionIntoLines();
+    void clearMultipleCursors();
 
     // Paints a full-width tint behind the line the caret is on. In dark mode the
     // tint is a touch lighter than the near-black background; in light mode it is
@@ -40,12 +44,21 @@ public:
     void highlightCurrentLine() {
         QList<QTextEdit::ExtraSelection> extras;
         QTextEdit::ExtraSelection sel;
-        sel.format.setBackground(darkMode ? QColor(45, 45, 45) : QColor(236, 236, 236));
+        sel.format.setBackground(currentLineColor);
         sel.format.setProperty(QTextFormat::FullWidthSelection, true);
         sel.cursor = textCursor();
         sel.cursor.clearSelection();
         extras.append(sel);
+        for (const auto& cursor : multipleCursors) {
+            if (!cursor.hasSelection()) continue;
+            QTextEdit::ExtraSelection selection;
+            selection.cursor = cursor;
+            selection.format.setBackground(palette().highlight());
+            selection.format.setForeground(palette().highlightedText());
+            extras.append(selection);
+        }
         setExtraSelections(extras);
+        viewport()->update();
     }
 
     int lineNumberAreaWidth() {
@@ -56,53 +69,61 @@ public:
     }
 
     void updateLineNumberAreaWidth() {
-        if (showLineNumbers)
-            setViewportMargins(lineNumberAreaWidth(), 0, 0, 0);
-        else
-            setViewportMargins(0, 0, 0, 0);
+        const int width = showLineNumbers ? lineNumberAreaWidth() : 0;
+        if (viewportMargins().left() != width)
+            setViewportMargins(width, 0, 0, 0);
+        if (lineNumberArea && showLineNumbers) {
+            const QRect view = viewport()->geometry();
+            lineNumberArea->setGeometry(view.left() - width, view.top(), width, view.height());
+        }
     }
 
     void lineNumberAreaPaintEvent(QPaintEvent* event) {
-        QColor gutterBg   = darkMode ? QColor(40,  40,  40)  : QColor(220, 220, 220);
-        QColor gutterText = darkMode ? QColor(130, 130, 130)  : QColor(100, 100, 100);
-
         QPainter painter(lineNumberArea);
-        painter.fillRect(event->rect(), gutterBg);
+        painter.fillRect(event->rect(), gutterBackground);
+        painter.setFont(font());
+        painter.setPen(gutterForeground);
+        const QFontMetricsF metrics(painter.font());
+        const int right = lineNumberArea->width() - 8;
 
-        QTextBlock block = firstVisibleBlock();
-        int blockNumber  = block.blockNumber();
-        int top    = qRound(blockBoundingGeometry(block).translated(contentOffset()).top());
-        int bottom = top + qRound(blockBoundingRect(block).height());
+        for (QTextBlock block = firstVisibleBlock(); block.isValid(); block = block.next()) {
+            const QRectF bounds = blockBoundingGeometry(block).translated(contentOffset());
+            if (bounds.top() > event->rect().bottom()) break;
+            if (!block.isVisible() || bounds.bottom() < event->rect().top()) continue;
 
-        while (block.isValid() && top <= event->rect().bottom()) {
-            if (block.isVisible() && bottom >= event->rect().top()) {
-                painter.setPen(gutterText);
-                painter.drawText(0, top,
-                                 lineNumberArea->width() - 6,
-                                 fontMetrics().height(),
-                                 Qt::AlignRight,
-                                 QString::number(blockNumber + 1));
-            }
-            block  = block.next();
-            top    = bottom;
-            bottom = top + qRound(blockBoundingRect(block).height());
-            ++blockNumber;
+            const QTextLine firstLine = block.layout()->lineAt(0);
+            if (!firstLine.isValid()) continue;
+            const QString number = QString::number(block.blockNumber() + 1);
+            const qreal baseline = bounds.top() + firstLine.y() + firstLine.ascent();
+            painter.drawText(QPointF(right - metrics.horizontalAdvance(number), baseline), number);
         }
     }
 
     QWidget* lineNumberArea  = nullptr;
     bool     showLineNumbers = false;
     bool     darkMode        = false;
+    QColor   currentLineColor = QColor(236, 236, 236);
+    QColor   gutterBackground = QColor(220, 220, 220);
+    QColor   gutterForeground = QColor(100, 100, 100);
 
 protected:
+    void keyPressEvent(QKeyEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+    void insertFromMimeData(const QMimeData* source) override;
+
     void resizeEvent(QResizeEvent* e) override {
         QPlainTextEdit::resizeEvent(e);
-        if (lineNumberArea && showLineNumbers) {
-            QRect cr = contentsRect();
-            lineNumberArea->setGeometry(cr.left(), cr.top(),
-                                        lineNumberAreaWidth(), cr.height());
-        }
+        updateLineNumberAreaWidth();
     }
+
+private:
+    void refreshMultipleCursors();
+    void editMultipleCursors(const QString& text, QTextCursor::MoveOperation deletion);
+
+    QList<QTextCursor> multipleCursors;
+    QString occurrenceText;
+    bool editingMultiple = false;
 };
 
 // ── Gutter widget ──────────────────────────────────────────────
@@ -120,6 +141,9 @@ private:
     CodeEditor* codeEditor;
 };
 
+class QToolButton;
+class QActionGroup;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -128,6 +152,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void changeEvent(QEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
@@ -159,6 +185,7 @@ private slots:
     void onSnippetContextMenu(const QPoint& pos);
 
     // Export
+    void onImportSnippet();
     void onExportSnippet();
     void onExportFolder();
 
@@ -178,20 +205,24 @@ private slots:
     void updateStatusInfo();
 
 private:
+    void updateWindowCorners();
     void setupUI();
     void setupMenuBar();
     void loadFolders();
     void loadSnippets(int folderID, int selectSnippetID = -1);
+    void updateFavoriteButton(bool favorite);
     void resortSnippetList();   // re-orders the list in place (favorites first, then title) without touching the editor
     void clearEditor();
     void populateEditor(const Snippet& s);
-    void applyThemeStyles(bool dark);
+    void applyThemeStyles();
     void restoreLastSelection();
 
     // Feature helpers
     void applyEditorFont();
+    void setCodeLineSpacing(int pixels);
     void moveSnippetToFolder(int targetFolderID);
-    void createSnippetFromFile(const QString& path);
+    bool importSnippetFiles(const QStringList& paths);
+    int createSnippetFromFile(const QString& path);
     bool exportSnippetToPath(const QString& code, const QString& path);
     QString relativeTime(const QString& iso) const;
     const Snippet* currentSnippet() const;   // in-memory record for currentSnippetID, or nullptr
@@ -221,6 +252,7 @@ private:
     CodeEditor*     codeEditor;
     LineNumberArea* lineNumberArea;
     QTextEdit*      noteEditor;
+    QPushButton*    btnFavorite;
     QPushButton*    btnCopyCode;
     QPushButton*    btnSave;
 
@@ -234,9 +266,12 @@ private:
     QLabel*         statusInfoLabel;
 
     // Options
-    QAction*        wrapAction;
+    QCheckBox*      wrapCheck;
+    QToolButton*    fontSizeButton;
+    QToolButton*    lineSpacingButton;
     QAction*        darkModeAction;
-    QAction*        lineNumberAction;
+    QActionGroup*   colorSchemeActions;
+    QCheckBox*      lineNumberCheck;
     bool            wrapEnabled        = false;
     bool            darkModeEnabled    = false;
     bool            lineNumbersEnabled = false;
@@ -256,5 +291,7 @@ private:
     bool loadingSnippet = false;   // suppresses dirty-marking while populating fields programmatically
     bool rebuildingList = false;   // suppresses the unsaved-changes guard during programmatic list rebuilds
 
-    int  editorFontSize = 12;      // point size for the code and notes editors
+    QString editorFontFamily = QStringLiteral("Monospace");
+    int editorFontSize = 12;
+    int codeLineSpacing = 2;
 };

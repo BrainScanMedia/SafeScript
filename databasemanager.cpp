@@ -30,6 +30,7 @@ QString DatabaseManager::databasePath() const {
 
 // ── Connection helpers ─────────────────────────────────────────
 bool DatabaseManager::openConnection() {
+    const bool newDatabase = !QFile::exists(dbPath);
     db = QSqlDatabase::addDatabase("QSQLITE");
     db.setDatabaseName(dbPath);
 
@@ -39,6 +40,10 @@ bool DatabaseManager::openConnection() {
     }
 
     createTablesIfNeeded();
+    if (newDatabase) {
+        saveSetting("ShowSnippetDescription", "off");
+        saveSetting("ShowSnippetNotes", "off");
+    }
     return true;
 }
 
@@ -320,7 +325,7 @@ int DatabaseManager::insertSnippet(int folderID, const QString& title, const QSt
     q.addBindValue(code);
     q.addBindValue(now);
     q.addBindValue(now);
-    q.exec();
+    if (!q.exec()) return -1;
     return q.lastInsertId().toInt();
 }
 

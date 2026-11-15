@@ -1,13 +1,24 @@
+#include <QToolButton>
+#include <QWindow>
+#include <QCollator>
+#include <QRegularExpression>
+#include <QPainterPath>
+#include <QActionGroup>
+#include <QStyle>
+#include <QStyleOptionButton>
 #include "mainwindow.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QSplitter>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
-#include <QInputDialog>
+#include <QDialogButtonBox>
 #include <QFont>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QApplication>
@@ -27,6 +38,7 @@
 #include <QEvent>
 #include <QSignalBlocker>
 #include <QStatusBar>
+#include <QSizeGrip>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QStandardPaths>
@@ -44,6 +56,760 @@
 #include <QTextDocument>
 #include <QSet>
 #include <algorithm>
+
+static QRegion roundedWindowRegion(const QRect& rect) {
+    constexpr int radius = 12;
+    QPainterPath outline;
+    outline.addRoundedRect(QRectF(rect), radius, radius);
+    return QRegion(outline.toFillPolygon().toPolygon());
+}
+
+class PopupDialog : public QDialog {
+public:
+    PopupDialog(QWidget* parent, const QString& title,
+                QStyle::StandardPixmap icon = QStyle::SP_MessageBoxInformation)
+        : QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint) {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setObjectName("safeScriptPopup");
+        setStyleSheet("QDialog#safeScriptPopup { background: transparent; }"
+                      "QWidget#popupContent { background-color: palette(window); }");
+        setWindowTitle(title);
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+
+        heading = new QWidget;
+        heading->setObjectName("popupHeading");
+        heading->setStyleSheet("QWidget#popupHeading { background-color: palette(alternate-base); }"
+                               "QLabel { background: transparent; color: palette(window-text);"
+                               " font-weight: bold; }");
+        auto* headerLayout = new QHBoxLayout(heading);
+        headerLayout->setContentsMargins(16, 8, 16, 8);
+        headerLayout->setSpacing(8);
+        auto* iconLabel = new QLabel;
+        iconLabel->setPixmap(style()->standardIcon(icon).pixmap(QSize(16, 16), devicePixelRatioF()));
+        headerLayout->addWidget(iconLabel);
+        auto* titleLabel = new QLabel(title);
+        titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        headerLayout->addWidget(titleLabel, 1);
+        layout->addWidget(heading);
+
+        content = new QWidget;
+        content->setObjectName("popupContent");
+        body = new QVBoxLayout(content);
+        body->setContentsMargins(16, 16, 16, 16);
+        layout->addWidget(content);
+    }
+
+    QVBoxLayout* body;
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QDialog::resizeEvent(event);
+        const QRegion shape = roundedWindowRegion(rect());
+        setMask(shape);
+        heading->setMask(shape);
+        content->setMask(shape.translated(0, -content->y()));
+    }
+
+private:
+    QWidget* heading;
+    QWidget* content;
+};
+
+static QMessageBox::StandardButton showPopup(
+    QWidget* parent, const QString& title, const QString& message,
+    QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+    QMessageBox::StandardButton defaultButton = QMessageBox::Ok) {
+    PopupDialog dialog(parent, title, buttons == QMessageBox::Ok
+                                         ? QStyle::SP_MessageBoxInformation
+                                         : QStyle::SP_MessageBoxQuestion);
+    dialog.setMinimumWidth(260);
+    auto* label = new QLabel(message);
+    label->setTextFormat(Qt::PlainText);
+    label->setWordWrap(true);
+    dialog.body->addWidget(label);
+
+    auto* box = new QDialogButtonBox(QDialogButtonBox::StandardButtons(int(buttons)));
+    if (auto* button = box->button(QDialogButtonBox::StandardButton(defaultButton)))
+        button->setDefault(true);
+    QObject::connect(box, &QDialogButtonBox::clicked, &dialog, [&dialog, box](QAbstractButton* button) {
+        dialog.done(box->standardButton(button));
+    });
+    dialog.body->addWidget(box);
+    const int result = dialog.exec();
+    return result == QDialog::Rejected ? QMessageBox::Cancel : QMessageBox::StandardButton(result);
+}
+
+static QString promptPopupText(QWidget* parent, const QString& title, const QString& label,
+                               const QString& value = {}) {
+    PopupDialog dialog(parent, title);
+    dialog.setMinimumWidth(300);
+    dialog.body->addWidget(new QLabel(label));
+    auto* field = new QLineEdit(value);
+    dialog.body->addWidget(field);
+    field->setFocus();
+    field->selectAll();
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    QObject::connect(box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.body->addWidget(box);
+    return dialog.exec() == QDialog::Accepted ? field->text() : QString();
+}
+
+class EditorCheckBox : public QCheckBox {
+public:
+    using QCheckBox::QCheckBox;
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        QCheckBox::paintEvent(event);
+        if (palette().color(QPalette::Window).lightness() < 128) return;
+
+        QStyleOptionButton option;
+        initStyleOption(&option);
+        const QRectF box = QRectF(style()->subElementRect(QStyle::SE_CheckBoxIndicator, &option, this))
+                               .adjusted(0.5, 0.5, -0.5, -0.5);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QColor("#777777"));
+        painter.setBrush(option.palette.color(QPalette::Base));
+        painter.drawRoundedRect(box, 2, 2);
+
+        if (isChecked()) {
+            painter.setPen(QPen(option.palette.color(QPalette::Text), 1.6, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.drawPolyline(QPolygonF{
+                QPointF(box.left() + box.width() * 0.22, box.top() + box.height() * 0.52),
+                QPointF(box.left() + box.width() * 0.43, box.top() + box.height() * 0.73),
+                QPointF(box.left() + box.width() * 0.80, box.top() + box.height() * 0.29)
+            });
+        }
+    }
+};
+
+class FooterResizeGrip : public QSizeGrip {
+public:
+    explicit FooterResizeGrip(QWidget* parent) : QSizeGrip(parent) {
+        setFixedSize(24, 24);
+        setToolTip("Resize window");
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        QColor color = palette().color(QPalette::WindowText);
+        color.setAlpha(150);
+        painter.setPen(color);
+        const int right = width() - 5;
+        const int bottom = height() - 5;
+        for (int length : {5, 9, 13})
+            painter.drawLine(right - length, bottom, right, bottom - length);
+    }
+};
+
+class WindowTitleBar : public QWidget {
+public:
+    explicit WindowTitleBar(QWidget* window) : QWidget(window), window(window) {
+        setObjectName("windowTitleBar");
+        auto* row = new QGridLayout(this);
+        row->setContentsMargins(12, 8, 12, 8);
+        row->setSpacing(0);
+        constexpr int controlWidth = 24;
+        constexpr int controlSpacing = 8;
+        constexpr int controlsWidth = 3 * controlWidth + 2 * controlSpacing;
+        row->setColumnMinimumWidth(0, controlsWidth);
+        row->setColumnStretch(1, 1);
+        row->setColumnMinimumWidth(2, controlsWidth);
+
+        title = new QLabel;
+        title->setAlignment(Qt::AlignCenter);
+        title->setAttribute(Qt::WA_TransparentForMouseEvents);
+        row->addWidget(title, 0, 1);
+
+        auto* controls = new QHBoxLayout;
+        controls->setSpacing(controlSpacing);
+        row->addLayout(controls, 0, 2);
+
+        const auto makeButton = [controls, controlWidth](const QString& glyph, const QString& label) {
+            auto* button = new QToolButton;
+            button->setFixedSize(controlWidth, controlWidth);
+            button->setText(glyph);
+            button->setToolTip(label);
+            button->setAccessibleName(label);
+            controls->addWidget(button);
+            return button;
+        };
+
+        auto* minimize = makeButton("−", "Minimize");
+        connect(minimize, &QToolButton::clicked, window, &QWidget::showMinimized);
+
+        maximize = makeButton("□", "Maximize");
+        connect(maximize, &QToolButton::clicked, this, [this]() { toggleMaximized(); });
+
+        auto* close = makeButton("×", "Close");
+        connect(close, &QToolButton::clicked, window, &QWidget::close);
+
+        window->installEventFilter(this);
+        refresh();
+    }
+
+protected:
+    bool eventFilter(QObject* object, QEvent* event) override {
+        if (object == window && (event->type() == QEvent::WindowTitleChange ||
+                                 event->type() == QEvent::ModifiedChange ||
+                                 event->type() == QEvent::WindowStateChange))
+            refresh();
+        return QWidget::eventFilter(object, event);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton && window->windowHandle() &&
+            window->windowHandle()->startSystemMove()) {
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) {
+            toggleMaximized();
+            event->accept();
+            return;
+        }
+        QWidget::mouseDoubleClickEvent(event);
+    }
+
+private:
+    void toggleMaximized() {
+        if (window->isMaximized())
+            window->showNormal();
+        else
+            window->showMaximized();
+    }
+
+    void refresh() {
+        title->setText(QString(window->windowTitle()).replace("[*]", window->isWindowModified() ? "*" : ""));
+        const bool maximized = window->isMaximized();
+        maximize->setText(maximized ? "❐" : "□");
+        const QString label = maximized ? "Restore" : "Maximize";
+        maximize->setToolTip(label);
+        maximize->setAccessibleName(label);
+    }
+
+    QWidget* window;
+    QLabel* title;
+    QToolButton* maximize;
+};
+
+class DropdownMenu : public QMenu {
+public:
+    DropdownMenu(const QString& title, QWidget* parent) : QMenu(title, parent) {
+        setAttribute(Qt::WA_TranslucentBackground);
+        connect(this, &QMenu::hovered, this, [this]() { update(); });
+    }
+
+protected:
+    bool event(QEvent* event) override {
+        QAction* previous = activeAction();
+        const bool handled = QMenu::event(event);
+        if (previous != activeAction()) update();
+        return handled;
+    }
+
+    void paintEvent(QPaintEvent* event) override {
+        QMenu::paintEvent(event);
+        const bool dark = palette().color(QPalette::Window).lightness() < 128;
+        QPainter painter(this);
+        painter.setPen(dark ? QColor("#1a1a1a") : QColor("#cccccc"));
+        for (auto* item : actions()) {
+            if (!item->isSeparator()) continue;
+            const QRect separator = actionGeometry(item);
+            if (separator.isEmpty()) continue;
+            painter.drawLine(1, separator.center().y(), width() - 2, separator.center().y());
+        }
+
+        auto* action = activeAction();
+        if (!action || !action->isEnabled() || action->isSeparator()) return;
+
+        const QRect row = actionGeometry(action);
+        const QColor highlight = dark ? QColor("#094771") : QColor("#dedede");
+        painter.fillRect(QRect(1, row.top(), row.left() - 1, row.height()), highlight);
+        painter.fillRect(QRect(row.right() + 1, row.top(),
+                               width() - row.right() - 2, row.height()), highlight);
+    }
+};
+
+static QMenu* addDropdown(QMenuBar* bar, const QString& title) {
+    auto* menu = new DropdownMenu(title, bar);
+    bar->addMenu(menu);
+    return menu;
+}
+
+static QString convertCodeToAscii(const QString& code) {
+    QString result;
+    result.reserve(code.size());
+    bool followsAsciiLetter = false;
+    for (const char32_t character : code.normalized(QString::NormalizationForm_KD).toUcs4()) {
+        if (character <= 0x7f) {
+            const QChar ascii(static_cast<ushort>(character));
+            result.append(ascii);
+            followsAsciiLetter = ascii.isLetter();
+            continue;
+        }
+
+        const auto category = QChar::category(character);
+        if (followsAsciiLetter && (category == QChar::Mark_NonSpacing ||
+                                   category == QChar::Mark_SpacingCombining ||
+                                   category == QChar::Mark_Enclosing))
+            continue;
+        followsAsciiLetter = false;
+
+        switch (character) {
+        case U'‘': case U'’': result += u'\''; break;
+        case U'“': case U'”': result += u'"'; break;
+        case U'–': case U'—': case U'−': result += u'-'; break;
+        case U'ß': result += "ss"; break;
+        case U'Æ': result += "AE"; break;
+        case U'æ': result += "ae"; break;
+        case U'Œ': result += "OE"; break;
+        case U'œ': result += "oe"; break;
+        default:
+            result += QStringLiteral("\\u{%1}").arg(quint32(character), 0, 16);
+            break;
+        }
+    }
+    return result;
+}
+
+static QString expandCodeTabs(const QString& code) {
+    QString result;
+    result.reserve(code.size());
+    int column = 0;
+    for (const QChar character : code) {
+        if (character == u'\t') {
+            const int spaces = 4 - column % 4;
+            result.append(QString(spaces, u' '));
+            column += spaces;
+        } else {
+            result.append(character);
+            column = character == u'\n' ? 0 : column + 1;
+        }
+    }
+    return result;
+}
+
+static QString removeHiddenCodeCharacters(const QString& code) {
+    QString result;
+    result.reserve(code.size());
+    for (const QChar character : code) {
+        const auto category = character.category();
+        if ((category != QChar::Other_Control && category != QChar::Other_Format) ||
+            character == u'\t' || character == u'\n' || character == u'\r') {
+            result.append(character);
+        }
+    }
+    return result;
+}
+
+static QString prettifyCodeIndentation(const QString& code) {
+    QStringList lines = code.split(u'\n');
+    QList<int> levels{0};
+    for (QString& line : lines) {
+        qsizetype start = 0;
+        int indent = 0;
+        while (start < line.size() && (line[start] == u' ' || line[start] == u'\t')) {
+            indent += line[start] == u'\t' ? 4 - indent % 4 : 1;
+            ++start;
+        }
+        if (start == line.size()) {
+            line.clear();
+            continue;
+        }
+
+        while (levels.last() > indent)
+            levels.removeLast();
+        if (levels.last() < indent)
+            levels.append(indent);
+        line.replace(0, start, QString(levels.size() - 1, u' '));
+    }
+    return lines.join(u'\n');
+}
+
+static QString titleCase(const QString& text) {
+    static const QRegularExpression words(QStringLiteral(R"(\p{L}[\p{L}\p{M}\p{N}]*)"));
+    QString result = text;
+    auto matches = words.globalMatch(text);
+    qsizetype offset = 0;
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        const QString word = match.captured();
+        const QString converted = word.left(1).toUpper() + word.mid(1).toLower();
+        result.replace(match.capturedStart() + offset, word.size(), converted);
+        offset += converted.size() - word.size();
+    }
+    return result;
+}
+
+static QString swapCase(const QString& text) {
+    QString result;
+    result.reserve(text.size());
+    for (const QChar character : text)
+        result.append(character.isUpper() ? character.toLower() : character.toUpper());
+    return result;
+}
+
+static QString identifierCase(const QString& text, bool capitalizeFirst) {
+    static const QRegularExpression boundaries(
+        QStringLiteral(R"((?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll}))"));
+    static const QRegularExpression separators(QStringLiteral(R"([^\p{L}\p{M}\p{N}]+)"));
+    QStringList lines = text.split(u'\n');
+    for (QString& line : lines) {
+        QString spaced = line;
+        spaced.replace(boundaries, " ");
+        QStringList words = spaced.toLower().split(separators, Qt::SkipEmptyParts);
+        if (words.isEmpty()) continue;
+        for (qsizetype i = capitalizeFirst ? 0 : 1; i < words.size(); ++i)
+            words[i].replace(0, 1, words[i].left(1).toUpper());
+        line = words.join(QString());
+    }
+    return lines.join(u'\n');
+}
+
+class CodeDocumentLayout : public QPlainTextDocumentLayout {
+public:
+    explicit CodeDocumentLayout(QTextDocument* document) : QPlainTextDocumentLayout(document) {}
+
+    QRectF blockBoundingRect(const QTextBlock& block) const override {
+        QRectF bounds = QPlainTextDocumentLayout::blockBoundingRect(block);
+        if (block.isValid() && block.isVisible())
+            bounds.setHeight(bounds.height() + spacing);
+        return bounds;
+    }
+
+    int spacing = 2;
+};
+
+CodeEditor::CodeEditor(QWidget* parent) : QPlainTextEdit(parent) {
+    auto* codeDocument = new QTextDocument(this);
+    codeDocument->setDocumentLayout(new CodeDocumentLayout(codeDocument));
+    setDocument(codeDocument);
+    connect(this, &QPlainTextEdit::cursorPositionChanged, this, &CodeEditor::highlightCurrentLine);
+    connect(this, &QPlainTextEdit::textChanged, this, [this]() {
+        if (!editingMultiple) clearMultipleCursors();
+    });
+    highlightCurrentLine();
+}
+
+void CodeEditor::setLineSpacing(int pixels) {
+    auto* layout = static_cast<CodeDocumentLayout*>(document()->documentLayout());
+    if (layout->spacing == pixels) return;
+    layout->spacing = pixels;
+    document()->markContentsDirty(0, document()->characterCount());
+    ensureCursorVisible();
+    viewport()->update();
+    if (lineNumberArea) lineNumberArea->update();
+}
+
+void CodeEditor::sortLines(Qt::CaseSensitivity sensitivity) {
+    if (isReadOnly()) return;
+    const QTextCursor original = textCursor();
+    QTextCursor range(document());
+    range.select(QTextCursor::Document);
+    if (original.hasSelection()) {
+        const QTextBlock first = document()->findBlock(original.selectionStart());
+        const QTextBlock last = document()->findBlock(original.selectionEnd() - 1);
+        range.setPosition(first.position());
+        range.setPosition(last.position() + last.length() - 1, QTextCursor::KeepAnchor);
+    }
+
+    const QString text = range.selectedText().replace(QChar::ParagraphSeparator, u'\n');
+    QStringList lines = text.split(u'\n');
+    const bool trailingNewline = !original.hasSelection() && text.endsWith(u'\n');
+    if (trailingNewline) lines.removeLast();
+
+    QLocale locale;
+    if (locale.language() == QLocale::C) locale = QLocale(QLocale::English);
+    QCollator collator(locale);
+    collator.setCaseSensitivity(sensitivity);
+    collator.setNumericMode(true);
+    std::stable_sort(lines.begin(), lines.end(), [&collator](const QString& a, const QString& b) {
+        return collator.compare(a, b) < 0;
+    });
+
+    QString sorted = lines.join(u'\n');
+    if (trailingNewline) sorted += u'\n';
+    if (sorted == text) return;
+
+    clearMultipleCursors();
+    const int start = range.selectionStart();
+    range.beginEditBlock();
+    range.insertText(sorted);
+    range.endEditBlock();
+    if (original.hasSelection()) {
+        const int end = range.position();
+        range.setPosition(start);
+        range.setPosition(end, QTextCursor::KeepAnchor);
+    } else {
+        range.setPosition(original.position());
+    }
+    setTextCursor(range);
+}
+
+void CodeEditor::convertCase(QString (*convert)(const QString&)) {
+    if (isReadOnly()) return;
+    const bool multiple = !multipleCursors.isEmpty();
+    QList<QTextCursor> selections = multiple ? multipleCursors : QList<QTextCursor>{textCursor()};
+    if (!multiple && !selections.first().hasSelection())
+        selections.first().select(QTextCursor::WordUnderCursor);
+
+    editingMultiple = true;
+    occurrenceText.clear();
+    QTextCursor transaction(document());
+    transaction.beginEditBlock();
+    for (auto& cursor : selections) {
+        if (!cursor.hasSelection()) continue;
+        const QString original = cursor.selectedText().replace(QChar::ParagraphSeparator, u'\n');
+        const QString converted = convert(original);
+        if (original == converted) continue;
+        const int start = cursor.selectionStart();
+        cursor.insertText(converted);
+        const int end = cursor.position();
+        cursor.setPosition(start);
+        cursor.setPosition(end, QTextCursor::KeepAnchor);
+    }
+    transaction.endEditBlock();
+    editingMultiple = false;
+    if (multiple) {
+        multipleCursors = selections;
+        refreshMultipleCursors();
+    } else {
+        setTextCursor(selections.first());
+    }
+}
+
+void CodeEditor::clearMultipleCursors() {
+    if (multipleCursors.isEmpty() && occurrenceText.isEmpty()) return;
+    multipleCursors.clear();
+    occurrenceText.clear();
+    highlightCurrentLine();
+}
+
+void CodeEditor::refreshMultipleCursors() {
+    setTextCursor(multipleCursors.last());
+    highlightCurrentLine();
+}
+
+void CodeEditor::selectNextOccurrence() {
+    if (occurrenceText.isEmpty()) {
+        QTextCursor cursor = textCursor();
+        const bool hadSelection = cursor.hasSelection();
+        if (!hadSelection) cursor.select(QTextCursor::WordUnderCursor);
+        const QString text = cursor.selectedText();
+        if (text.isEmpty()) return;
+        multipleCursors = {cursor};
+        occurrenceText = text;
+        if (!hadSelection) {
+            refreshMultipleCursors();
+            return;
+        }
+    }
+
+    const QString code = toPlainText();
+    const QString needle = QString(occurrenceText).replace(QChar::ParagraphSeparator, u'\n');
+    const qsizetype start = multipleCursors.last().selectionEnd();
+    for (const auto& range : {qMakePair(start, code.size()), qMakePair(qsizetype(0), start)}) {
+        qsizetype position = code.indexOf(needle, range.first);
+        while (position >= 0 && position < range.second) {
+            const qsizetype end = position + needle.size();
+            const bool overlaps = std::any_of(multipleCursors.cbegin(), multipleCursors.cend(),
+                                              [position, end](const QTextCursor& cursor) {
+                return position < cursor.selectionEnd() && end > cursor.selectionStart();
+            });
+            if (!overlaps) {
+                QTextCursor match(document());
+                match.setPosition(int(position));
+                match.setPosition(int(end), QTextCursor::KeepAnchor);
+                multipleCursors.append(match);
+                refreshMultipleCursors();
+                return;
+            }
+            position = code.indexOf(needle, position + 1);
+        }
+    }
+}
+
+void CodeEditor::splitSelectionIntoLines() {
+    const QTextCursor selection = textCursor();
+    if (!selection.hasSelection()) return;
+
+    clearMultipleCursors();
+    const int end = selection.selectionEnd();
+    for (QTextBlock block = document()->findBlock(selection.selectionStart());
+         block.isValid() && block.position() < end; block = block.next()) {
+        QTextCursor cursor(block);
+        cursor.setPosition(qMin(end, block.position() + block.length() - 1));
+        multipleCursors.append(cursor);
+    }
+    refreshMultipleCursors();
+}
+
+void CodeEditor::editMultipleCursors(const QString& text, QTextCursor::MoveOperation deletion) {
+    occurrenceText.clear();
+    editingMultiple = true;
+    QList<QTextCursor> edits = multipleCursors;
+    for (auto& cursor : edits) {
+        if (!cursor.hasSelection() && deletion != QTextCursor::NoMove)
+            cursor.movePosition(deletion, QTextCursor::KeepAnchor);
+    }
+    std::sort(edits.begin(), edits.end(), [](const QTextCursor& left, const QTextCursor& right) {
+        return left.selectionStart() < right.selectionStart();
+    });
+    for (qsizetype i = 1; i < edits.size();) {
+        const int start = edits[i - 1].selectionStart();
+        const int end = edits[i - 1].selectionEnd();
+        if (edits[i].selectionStart() < end || edits[i].selectionStart() == start) {
+            const int combinedEnd = qMax(end, edits[i].selectionEnd());
+            edits[i - 1].setPosition(start);
+            edits[i - 1].setPosition(combinedEnd, QTextCursor::KeepAnchor);
+            edits.removeAt(i);
+        } else {
+            ++i;
+        }
+    }
+    QTextCursor transaction(document());
+    transaction.beginEditBlock();
+    for (auto it = edits.rbegin(); it != edits.rend(); ++it)
+        it->insertText(text);
+    transaction.endEditBlock();
+
+    multipleCursors = edits;
+    editingMultiple = false;
+    refreshMultipleCursors();
+}
+
+void CodeEditor::keyPressEvent(QKeyEvent* event) {
+    if (multipleCursors.isEmpty()) {
+        QPlainTextEdit::keyPressEvent(event);
+        return;
+    }
+    if (event->key() == Qt::Key_Escape) {
+        clearMultipleCursors();
+        QTextCursor cursor = textCursor();
+        cursor.clearSelection();
+        setTextCursor(cursor);
+        return;
+    }
+
+    QTextCursor::MoveOperation movement = QTextCursor::NoMove;
+    const bool control = event->modifiers().testFlag(Qt::ControlModifier);
+    switch (event->key()) {
+    case Qt::Key_Home: movement = control ? QTextCursor::Start : QTextCursor::StartOfBlock; break;
+    case Qt::Key_End: movement = control ? QTextCursor::End : QTextCursor::EndOfBlock; break;
+    case Qt::Key_Left: movement = control ? QTextCursor::PreviousWord : QTextCursor::Left; break;
+    case Qt::Key_Right: movement = control ? QTextCursor::NextWord : QTextCursor::Right; break;
+    case Qt::Key_Up: movement = QTextCursor::Up; break;
+    case Qt::Key_Down: movement = QTextCursor::Down; break;
+    }
+    if (movement != QTextCursor::NoMove) {
+        occurrenceText.clear();
+        const bool extend = event->modifiers().testFlag(Qt::ShiftModifier);
+        for (auto& cursor : multipleCursors) {
+            if (!extend && cursor.hasSelection() &&
+                (movement == QTextCursor::Left || movement == QTextCursor::Right)) {
+                cursor.setPosition(movement == QTextCursor::Left ? cursor.selectionStart()
+                                                                  : cursor.selectionEnd());
+            } else {
+                cursor.movePosition(movement, extend ? QTextCursor::KeepAnchor : QTextCursor::MoveAnchor);
+            }
+        }
+        refreshMultipleCursors();
+        return;
+    }
+
+    if (!isReadOnly() && !control && !event->modifiers().testFlag(Qt::AltModifier)) {
+        switch (event->key()) {
+        case Qt::Key_Backspace: editMultipleCursors({}, QTextCursor::PreviousCharacter); return;
+        case Qt::Key_Delete: editMultipleCursors({}, QTextCursor::NextCharacter); return;
+        case Qt::Key_Return:
+        case Qt::Key_Enter: editMultipleCursors(QStringLiteral("\n"), QTextCursor::NoMove); return;
+        case Qt::Key_Tab: editMultipleCursors(QStringLiteral("\t"), QTextCursor::NoMove); return;
+        default: break;
+        }
+        if (!event->text().isEmpty() && event->text().front().category() != QChar::Other_Control) {
+            editMultipleCursors(event->text(), QTextCursor::NoMove);
+            return;
+        }
+    }
+
+    if (event->matches(QKeySequence::Undo) || event->matches(QKeySequence::Redo) ||
+        event->matches(QKeySequence::SelectAll))
+        clearMultipleCursors();
+    QPlainTextEdit::keyPressEvent(event);
+}
+
+void CodeEditor::insertFromMimeData(const QMimeData* source) {
+    if (!multipleCursors.isEmpty() && source->hasText() && !isReadOnly()) {
+        editMultipleCursors(source->text(), QTextCursor::NoMove);
+        return;
+    }
+    QPlainTextEdit::insertFromMimeData(source);
+}
+
+void CodeEditor::mousePressEvent(QMouseEvent* event) {
+    clearMultipleCursors();
+    QPlainTextEdit::mousePressEvent(event);
+}
+
+void CodeEditor::paintEvent(QPaintEvent* event) {
+    QPlainTextEdit::paintEvent(event);
+    if (multipleCursors.size() < 2 || !hasFocus()) return;
+    QPainter painter(viewport());
+    painter.setPen(palette().text().color());
+    for (qsizetype i = 0; i < multipleCursors.size() - 1; ++i) {
+        const auto& cursor = multipleCursors[i];
+        if (cursor.hasSelection()) continue;
+        const QRect caret = cursorRect(cursor);
+        painter.drawLine(caret.topLeft(), caret.bottomLeft());
+    }
+}
+
+static QIcon menuIcon(const QString& name, QStyle::StandardPixmap fallback) {
+    return QIcon::fromTheme(name, QApplication::style()->standardIcon(fallback));
+}
+
+static QIcon eyeMenuIcon() {
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QColor ink("#818b99");
+    painter.setPen(QPen(ink, 2.5));
+    QPainterPath eye(QPointF(3, 16));
+    eye.quadTo(16, 1, 29, 16);
+    eye.quadTo(16, 31, 3, 16);
+    painter.drawPath(eye);
+    painter.setBrush(ink);
+    painter.drawEllipse(QPointF(16, 16), 3, 3);
+    painter.end();
+    return QIcon(pixmap);
+}
+
+static QIcon favoriteMenuIcon() {
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QColor("#9a6400"));
+    painter.setBrush(QColor("#ffcc33"));
+    painter.drawPolygon(QPolygon{
+        {16, 2}, {20, 11}, {30, 12}, {23, 19}, {25, 29},
+        {16, 24}, {7, 29}, {9, 19}, {2, 12}, {12, 11}
+    });
+    painter.end();
+    return QIcon(pixmap);
+}
 
 // Display label for a snippet in the list: a star prefix marks favorites,
 // and empty titles fall back to a placeholder.
@@ -68,6 +834,10 @@ class FolderDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
+    static QRect handleRect(const QRect& row) {
+        return QRect(row.left() + 6, row.center().y() - 4, 13, 9);
+    }
+
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
                const QModelIndex& index) const override {
         QStyledItemDelegate::paint(painter, option, index);
@@ -77,9 +847,10 @@ public:
                                ? QColor(255, 255, 255, 180)
                                : QColor(150, 150, 150, 200);
         painter->setPen(QPen(lineColor, 1.5));
-        int x1 = option.rect.left() + 6;
-        int x2 = option.rect.left() + 18;
-        int cy = option.rect.center().y();
+        const QRect handle = handleRect(option.rect);
+        const int x1 = handle.left();
+        const int x2 = handle.right();
+        const int cy = handle.center().y();
         painter->drawLine(x1, cy - 4, x2, cy - 4);
         painter->drawLine(x1, cy,     x2, cy);
         painter->drawLine(x1, cy + 4, x2, cy + 4);
@@ -141,6 +912,27 @@ public:
 };
 
 // ── Palettes ──────────────────────────────────────────────────
+struct ColorScheme {
+    const char* name;
+    const char* editor;
+    const char* panel;
+    const char* text;
+    const char* border;
+    const char* selection;
+};
+
+static const ColorScheme colorSchemes[] = {
+    {"Midnight Blue", "#121b29", "#1d2a3b", "#e1ebf7", "#364c66", "#31587f"},
+    {"Forest",        "#15241e", "#20342a", "#e0efe7", "#3e594a", "#32644e"},
+    {"Plum",          "#23182c", "#31213e", "#f0e3fa", "#513b62", "#684681"},
+    {"Amber Terminal","#211b13", "#30271c", "#f4e5cb", "#594532", "#745028"},
+    {"Nord",          "#242933", "#303846", "#e5e9f0", "#49576b", "#426078"},
+    {"Obsidian",      "#191a20", "#24252e", "#edeaf5", "#464658", "#514477"},
+    {"Deep Teal",     "#102021", "#193032", "#e0f1ee", "#345558", "#286760"},
+    {"Paper",         "#fffdf6", "#f3eddf", "#332b20", "#c9bca7", "#775437"},
+    {"Glacier",       "#f7fcff", "#e7f1f7", "#1d3142", "#adc4d3", "#345e7d"},
+};
+
 static QPalette darkPalette() {
     QPalette p;
     p.setColor(QPalette::Window,          QColor(42,  42,  42));
@@ -194,16 +986,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Restore wrap
     QString savedWrap = DatabaseManager::instance().getSetting("WrapCode", "off");
     wrapEnabled = (savedWrap == "on");
-    wrapAction->setChecked(wrapEnabled);
+    wrapCheck->setChecked(wrapEnabled);
     codeEditor->setLineWrapMode(wrapEnabled ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
 
     // Restore dark mode
     QString savedDark = DatabaseManager::instance().getSetting("DarkMode", "off");
     darkModeEnabled = (savedDark == "on");
-    darkModeAction->setChecked(darkModeEnabled);
-    qApp->setPalette(darkModeEnabled ? darkPalette() : lightPalette());
-    applyThemeStyles(darkModeEnabled);
-    codeEditor->darkMode = darkModeEnabled;
+    const QString savedScheme = DatabaseManager::instance().getSetting("ColorScheme", "");
+    for (auto* action : colorSchemeActions->actions())
+        action->setChecked(action->text() == savedScheme);
+    applyThemeStyles();
 
     // Restore editor font size
     editorFontSize = DatabaseManager::instance().getSetting("EditorFontSize", "12").toInt();
@@ -214,7 +1006,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Restore line numbers
     QString savedLines = DatabaseManager::instance().getSetting("LineNumbers", "off");
     lineNumbersEnabled = (savedLines == "on");
-    lineNumberAction->setChecked(lineNumbersEnabled);
+    lineNumberCheck->setChecked(lineNumbersEnabled);
     codeEditor->showLineNumbers = lineNumbersEnabled;
     lineNumberArea->setVisible(lineNumbersEnabled);
     codeEditor->updateLineNumberAreaWidth();
@@ -253,9 +1045,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         QRect geo = screen->availableGeometry();
         move((geo.width() - width()) / 2, (geo.height() - height()) / 2);
     }
-    statusBar()->setStyleSheet(darkModeEnabled
-                                   ? "QStatusBar { background-color: #2a2a2a; border-top: 2px solid #3a3a3a; }"
-                                   : "QStatusBar { background-color: #cccccc; border-top: 2px solid #bbbbbb; }");
 }
 
 // ── Restore last opened folder / snippet ──────────────────────
@@ -290,7 +1079,26 @@ void MainWindow::restoreLastSelection() {
 }
 
 // ── Theme ─────────────────────────────────────────────────────
-void MainWindow::applyThemeStyles(bool dark) {
+void MainWindow::applyThemeStyles() {
+    const auto* selected = colorSchemeActions->checkedAction();
+    const auto* scheme = selected ? &colorSchemes[selected->data().toInt()] : nullptr;
+    const bool dark = scheme ? QColor(scheme->panel).lightness() < 128 : darkModeEnabled;
+    darkModeAction->setText(dark ? "Light Mode" : "Dark Mode");
+    darkModeAction->setIcon(menuIcon(dark ? "weather-clear" : "weather-clear-night",
+                                     QStyle::SP_DesktopIcon));
+
+    QPalette palette = dark ? darkPalette() : lightPalette();
+    if (scheme) {
+        palette.setColor(QPalette::Window, QColor(scheme->panel));
+        palette.setColor(QPalette::Base, QColor(scheme->editor));
+        palette.setColor(QPalette::AlternateBase, QColor(scheme->border));
+        palette.setColor(QPalette::Button, QColor(scheme->panel));
+        palette.setColor(QPalette::Highlight, QColor(scheme->selection));
+        palette.setColor(QPalette::HighlightedText, Qt::white);
+        for (auto role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText})
+            palette.setColor(role, QColor(scheme->text));
+    }
+    qApp->setPalette(palette);
     if (dark) {
         setStyleSheet(
             "QMainWindow { background-color: #1e1e1e; }"
@@ -310,15 +1118,13 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QPushButton:pressed { background-color: #094771; }"
             "QMenuBar { background-color: #1a1a1a; color: #d4d4d4; padding: 2px 8px; }"
             "QMenuBar::item:selected { background-color: #094771; border-radius: 4px; }"
-            "QMenu { background-color: #2a2a2a; color: #d4d4d4; border: 1px solid #3a3a3a; }"
-            "QMenu::item:selected { background-color: #094771; }"
+            "QMenu { background-color: #2a2a2a; color: #d4d4d4; border: 1px solid #3a3a3a; border-radius: 8px; padding: 10px 14px; }"
+            "QMenu::separator { height: 1px; margin: 2px 0; background: transparent; }"
+            "QMenu::item { padding: 5px 10px; border-radius: 4px; }"
+            "QMenu::item:selected { border-radius: 0; background-color: #094771; }"
             "QLabel { background-color: transparent; color: #d4d4d4; }"
-            "QScrollBar:vertical { background-color: #2a2a2a; width: 12px; }"
-            "QScrollBar::handle:vertical { background-color: #555555; border-radius: 4px; }"
-            "QScrollBar:horizontal { background-color: #2a2a2a; height: 12px; }"
-            "QScrollBar::handle:horizontal { background-color: #555555; border-radius: 4px; }"
             );
-        statusBar()->setStyleSheet("QStatusBar { background-color: #2a2a2a; border-top: 2px solid #3a3a3a; }");
+        statusBar()->setStyleSheet("QStatusBar { background-color: #1a1a1a; border-top: 2px solid #3a3a3a; }");
         folderList->setStyleSheet(
             "QListWidget { background-color: #2a2a2a; border: none; color: #d4d4d4; }"
             "QListWidget::item { padding-left: 22px; padding-top: 5px; padding-bottom: 5px;"
@@ -326,9 +1132,6 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QListWidget::item:selected { background-color: #094771; color: #ffffff; }"
             "QListWidget::item:hover { background-color: #3a3a3a; color: #ffffff; }"
             );
-        codeEditor->darkMode = true;
-        codeEditor->highlightCurrentLine();
-        lineNumberArea->update();
     } else {
         setStyleSheet(
             "QMainWindow { background-color: #f0f0f0; }"
@@ -348,13 +1151,11 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QPushButton:pressed { background-color: #0078d4; color: #ffffff; }"
             "QMenuBar { background-color: #CCCCCC; color: #000000; padding: 2px 8px; }"
             "QMenuBar::item:selected { background-color: #0078d4; color: #FFFFFF; border-radius: 4px; }"
-            "QMenu { background-color: #f5f5f5; color: #1e1e1e; border: 1px solid #cccccc; }"
-            "QMenu::item:selected { background-color: #0078d4; color: #ffffff; }"
+            "QMenu { background-color: #f5f5f5; color: #1e1e1e; border: 1px solid #cccccc; border-radius: 8px; padding: 10px 14px; }"
+            "QMenu::separator { height: 1px; margin: 2px 0; background: transparent; }"
+            "QMenu::item { padding: 5px 10px; border-radius: 4px; }"
+            "QMenu::item:selected { border-radius: 0; background-color: #dedede; color: #1e1e1e; }"
             "QLabel { background-color: transparent; color: #1e1e1e; }"
-            "QScrollBar:vertical { background-color: #f0f0f0; width: 12px; }"
-            "QScrollBar::handle:vertical { background-color: #bbbbbb; border-radius: 4px; }"
-            "QScrollBar:horizontal { background-color: #f0f0f0; height: 12px; }"
-            "QScrollBar::handle:horizontal { background-color: #bbbbbb; border-radius: 4px; }"
             );
         statusBar()->setStyleSheet("QStatusBar { background-color: #cccccc; border-top: 2px solid #bbbbbb; }");
         folderList->setStyleSheet(
@@ -364,10 +1165,76 @@ void MainWindow::applyThemeStyles(bool dark) {
             "QListWidget::item:selected { background-color: #0078d4; color: #ffffff; }"
             "QListWidget::item:hover { background-color: #e8e8e8; color: #000000; }"
             );
-        codeEditor->darkMode = false;
-        codeEditor->highlightCurrentLine();
-        lineNumberArea->update();
     }
+
+    codeEditor->darkMode = dark;
+    codeEditor->currentLineColor = dark ? QColor(45, 45, 45) : QColor(236, 236, 236);
+    codeEditor->gutterBackground = dark ? QColor(40, 40, 40) : QColor(220, 220, 220);
+    codeEditor->gutterForeground = dark ? QColor(130, 130, 130) : QColor(100, 100, 100);
+    sidebarWidget->setStyleSheet(QString());
+
+    const QColor chrome = scheme ? QColor(scheme->panel).darker(dark ? 145 : 112)
+                                 : QColor(dark ? "#1a1a1a" : "#cccccc");
+    const QColor titleBackground = chrome.darker(dark ? 130 : 110);
+    const QColor chromeText = palette.color(QPalette::WindowText);
+    QString chromeStyle = QStringLiteral(
+        "QMainWindow#safeScriptWindow, QWidget#windowChrome { background: transparent; }"
+        "QWidget#windowTitleBar { background-color: %1; color: %2; }"
+        "QWidget#windowTitleBar QLabel { font-weight: bold; }"
+        "QWidget#windowTitleBar QToolButton { background-color: %3; color: %2;"
+        " border: none; border-radius: 12px; font-size: 15px; font-weight: bold; padding: 0; }"
+        "QWidget#windowTitleBar QToolButton:hover { background-color: %4; }"
+        "QWidget#windowTitleBar QToolButton:pressed { background-color: %5; }"
+    ).arg(titleBackground.name(), chromeText.name(),
+          (dark ? chrome.lighter(145) : titleBackground.lighter(118)).name(),
+          (dark ? chrome.lighter(180) : titleBackground.lighter(128)).name(),
+          (dark ? chrome.lighter(210) : titleBackground.lighter(138)).name());
+
+    if (scheme) {
+        const QString panels = QStringLiteral(
+            "QWidget, QListWidget, QMenu, QMenuBar, QStatusBar { background-color: %1; color: %2; }"
+            "QMainWindow, QSplitter, QPlainTextEdit, QTextEdit, QLineEdit { background-color: %3; color: %2; }"
+            "QPlainTextEdit, QTextEdit, QLineEdit, QMenu, QPushButton { border-color: %4; }"
+            "QSplitter::handle { background-color: %4; }"
+            "QPushButton { background-color: %1; color: %2; }"
+            "QPushButton:hover, QListWidget::item:hover { background-color: %4; color: %2; }"
+            "QPushButton:pressed, QListWidget::item:selected, QMenuBar::item:selected { background-color: %5; color: white; }"
+            "QListWidget::item { border-bottom-color: %4; color: %2; }"
+            "QLabel { background-color: transparent; color: %2; }"
+        ).arg(scheme->panel, scheme->text, scheme->editor, scheme->border, scheme->selection);
+        setStyleSheet(styleSheet() + panels);
+        const QColor sidebarColor = QColor(scheme->panel).darker(dark ? 125 : 108);
+        sidebarWidget->setStyleSheet(QStringLiteral("QWidget#categorySidebar { background-color: %1; }")
+                                         .arg(sidebarColor.name()));
+        folderList->setStyleSheet(folderList->styleSheet() + panels +
+                                  QStringLiteral("QListWidget { background-color: %1; }")
+                                      .arg(sidebarColor.name()));
+        const QColor editorColor(scheme->editor);
+        codeEditor->currentLineColor = editorColor.darker(dark ? 130 : 108);
+        codeEditor->gutterBackground = editorColor.darker(dark ? 150 : 114);
+        const QColor textColor(scheme->text);
+        codeEditor->gutterForeground = dark ? textColor.darker(140) : textColor;
+        chromeStyle += QStringLiteral("QMenuBar { background-color: %1; }").arg(chrome.name());
+        statusBar()->setStyleSheet(QStringLiteral("QStatusBar { background-color: %1; border-top: 2px solid %2; }")
+                                      .arg(chrome.name(), scheme->border));
+    }
+    const QColor scrollThumb = scheme ? QColor(scheme->border)
+                                      : QColor(dark ? "#505050" : "#999999");
+    chromeStyle += QStringLiteral(
+        "QScrollBar:vertical { background-color: %1; width: 12px; }"
+        "QScrollBar:horizontal { background-color: %1; height: 12px; }"
+        "QScrollBar::handle { background-color: %2; border-radius: 4px; }"
+        "QScrollBar::handle:hover { background-color: %3; }"
+        "QScrollBar::handle:vertical { min-height: 20px; }"
+        "QScrollBar::handle:horizontal { min-width: 20px; }"
+        "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
+        "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
+        "QAbstractScrollArea::corner { background-color: %1; }"
+    ).arg(chrome.name(), scrollThumb.name(),
+          (dark ? scrollThumb.lighter(125) : scrollThumb.darker(115)).name());
+    setStyleSheet(styleSheet() + chromeStyle);
+    codeEditor->highlightCurrentLine();
+    lineNumberArea->update();
 }
 
 // ── Line number slots ─────────────────────────────────────────
@@ -378,7 +1245,7 @@ void MainWindow::onBlockCountChanged() {
 void MainWindow::onUpdateRequest(const QRect& rect, int dy) {
     if (!lineNumbersEnabled) return;
     if (dy)
-        lineNumberArea->scroll(0, dy);
+        lineNumberArea->update();
     else
         lineNumberArea->update(0, rect.y(), lineNumberArea->width(), rect.height());
     if (rect.contains(codeEditor->viewport()->rect()))
@@ -386,12 +1253,33 @@ void MainWindow::onUpdateRequest(const QRect& rect, int dy) {
 }
 
 // ── Event Filter ──────────────────────────────────────────────
+static bool hasLocalFiles(const QMimeData* mimeData) {
+    for (const QUrl& url : mimeData->urls()) {
+        if (url.isLocalFile()) return true;
+    }
+    return false;
+}
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove ||
+        event->type() == QEvent::Drop) {
+        auto* drop = static_cast<QDropEvent*>(event);
+        if (hasLocalFiles(drop->mimeData())) {
+            if (event->type() == QEvent::Drop)
+                dropEvent(drop);
+            else
+                drop->acceptProposedAction();
+            return true;
+        }
+    }
+
     if (obj == folderList->viewport()) {
         if (event->type() == QEvent::MouseMove) {
             QMouseEvent* me = static_cast<QMouseEvent*>(event);
             QListWidgetItem* item = folderList->itemAt(me->pos());
-            folderList->viewport()->setCursor(item ? Qt::OpenHandCursor : Qt::ArrowCursor);
+            const bool overHandle = item && FolderDelegate::handleRect(folderList->visualItemRect(item))
+                                                .adjusted(-1, -1, 1, 1).contains(me->pos());
+            folderList->viewport()->setCursor(overHandle ? Qt::OpenHandCursor : Qt::ArrowCursor);
         } else if (event->type() == QEvent::Leave) {
             folderList->viewport()->setCursor(Qt::ArrowCursor);
         }
@@ -402,7 +1290,10 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
 // ── Setup UI ──────────────────────────────────────────────────
 void MainWindow::setupUI() {
     // The "[*]" placeholder is shown as "*" whenever there are unsaved changes.
-    setWindowTitle("SafeScript v1.2.9[*]");
+    setWindowFlag(Qt::FramelessWindowHint);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setObjectName("safeScriptWindow");
+    setWindowTitle("SafeScript v1.3.0[*]");
     resize(1100, 700);
 
     // Accept files dropped from the file manager to create snippets.
@@ -410,14 +1301,17 @@ void MainWindow::setupUI() {
 
     // ── Footer status bar ─────────────────────────────────
     QStatusBar* sb = new QStatusBar(this);
-    sb->setFixedHeight(24);
+    sb->setFixedHeight(32);
+    sb->setSizeGripEnabled(false);
     setStatusBar(sb);
 
     // Permanent right-aligned info line (lines / chars / modified). It survives
     // transient showMessage() notifications, which appear on the left.
     statusInfoLabel = new QLabel;
-    statusInfoLabel->setContentsMargins(0, 0, 8, 0);
-    sb->addPermanentWidget(statusInfoLabel);
+    statusInfoLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    statusInfoLabel->setContentsMargins(0, 0, 6, 0);
+    sb->addWidget(statusInfoLabel, 1);
+    sb->addPermanentWidget(new FooterResizeGrip(sb));
 
     // ── Sidebar ──────────────────────────────────────────
     folderList = new QListWidget;
@@ -427,7 +1321,6 @@ void MainWindow::setupUI() {
     folderList->setItemDelegate(new FolderDelegate(folderList));
     folderList->setMouseTracking(true);
     folderList->viewport()->setMouseTracking(true);
-    folderList->viewport()->installEventFilter(this);
 
     connect(folderList, &QListWidget::currentItemChanged, this, &MainWindow::onFolderSelected);
     connect(folderList, &QListWidget::itemDoubleClicked,  this, &MainWindow::onRenameFolder);
@@ -457,6 +1350,7 @@ void MainWindow::setupUI() {
     sidebarLayout->addWidget(folderCountLabel);
 
     sidebarWidget = new QWidget;
+    sidebarWidget->setObjectName("categorySidebar");
     sidebarWidget->setLayout(sidebarLayout);
     sidebarWidget->setMinimumWidth(180);
 
@@ -547,7 +1441,7 @@ void MainWindow::setupUI() {
     findField->setPlaceholderText("Find");
     replaceField = new QLineEdit;
     replaceField->setPlaceholderText("Replace with");
-    findCaseCheck = new QCheckBox("Aa");
+    findCaseCheck = new EditorCheckBox("Aa");
     findCaseCheck->setToolTip("Match case");
     QPushButton* findNextBtn   = new QPushButton("Next");
     QPushButton* replaceBtn    = new QPushButton("Replace");
@@ -579,6 +1473,12 @@ void MainWindow::setupUI() {
     escFind->setContext(Qt::WidgetWithChildrenShortcut);
     connect(escFind, &QShortcut::activated, this, &MainWindow::onHideFindBar);
 
+    btnFavorite = new QPushButton("☆ Favorite");
+    btnFavorite->setFixedHeight(36);
+    btnFavorite->setEnabled(false);
+    updateFavoriteButton(false);
+    connect(btnFavorite, &QPushButton::clicked, this, &MainWindow::onToggleFavorite);
+
     btnCopyCode = new QPushButton("📋 Copy Code");
     btnCopyCode->setFixedHeight(36);
     btnCopyCode->setToolTip("Copy this snippet's code to the clipboard");
@@ -602,19 +1502,78 @@ void MainWindow::setupUI() {
     editorSplitter->setStretchFactor(1, 1);
     editorSplitter->setChildrenCollapsible(false);   // code/notes can't be dragged to zero
 
-    // Copy sits beside Save; Save stretches to remain the primary action.
+    wrapCheck = new EditorCheckBox("Wrap Lines");
+    connect(wrapCheck, &QCheckBox::clicked, this, &MainWindow::onToggleWrap);
+
+    lineNumberCheck = new EditorCheckBox("Line Numbers");
+    connect(lineNumberCheck, &QCheckBox::clicked, this, &MainWindow::onToggleLineNumbers);
+
+    auto* decreaseFontButton = new QToolButton;
+    decreaseFontButton->setText("A−");
+    decreaseFontButton->setToolTip("Decrease editor font size");
+    connect(decreaseFontButton, &QToolButton::clicked, this, &MainWindow::onDecreaseFont);
+
+    fontSizeButton = new QToolButton;
+    fontSizeButton->setToolTip("Reset editor font size");
+    connect(fontSizeButton, &QToolButton::clicked, this, &MainWindow::onResetFont);
+
+    auto* increaseFontButton = new QToolButton;
+    increaseFontButton->setText("A+");
+    increaseFontButton->setToolTip("Increase editor font size");
+    connect(increaseFontButton, &QToolButton::clicked, this, &MainWindow::onIncreaseFont);
+
+    auto* fontSizeLayout = new QHBoxLayout;
+    fontSizeLayout->setSpacing(2);
+    fontSizeLayout->addWidget(decreaseFontButton);
+    fontSizeLayout->addWidget(fontSizeButton);
+    fontSizeLayout->addWidget(increaseFontButton);
+
+    auto* lineSpacingLayout = new QHBoxLayout;
+    lineSpacingLayout->setSpacing(2);
+    const auto addSpacingButton = [this, lineSpacingLayout](const QString& label, const QString& tip) {
+        auto* button = new QToolButton;
+        button->setText(label);
+        button->setToolTip(tip);
+        button->setAccessibleName(tip);
+        lineSpacingLayout->addWidget(button);
+        return button;
+    };
+    auto* decreaseSpacing = addSpacingButton("↕−", "Decrease code line height");
+    lineSpacingButton = addSpacingButton(QString(), "Reset code line height");
+    auto* increaseSpacing = addSpacingButton("↕+", "Increase code line height");
+    connect(decreaseSpacing, &QToolButton::clicked, this, [this]() { setCodeLineSpacing(codeLineSpacing - 2); });
+    connect(lineSpacingButton, &QToolButton::clicked, this, [this]() { setCodeLineSpacing(2); });
+    connect(increaseSpacing, &QToolButton::clicked, this, [this]() { setCodeLineSpacing(codeLineSpacing + 2); });
+
     QHBoxLayout* actionRow = new QHBoxLayout;
     actionRow->setSpacing(8);
+    actionRow->addWidget(wrapCheck);
+    actionRow->addWidget(lineNumberCheck);
+    actionRow->addLayout(fontSizeLayout);
+    actionRow->addLayout(lineSpacingLayout);
+    actionRow->addStretch();
+    actionRow->addWidget(btnFavorite);
     actionRow->addWidget(btnCopyCode);
-    actionRow->addWidget(btnSave, 1);
+    actionRow->addWidget(btnSave);
 
     QVBoxLayout* editorLayout = new QVBoxLayout;
     editorLayout->setContentsMargins(8, 8, 8, 8);
+    auto* titleLabel = new QLabel("Title:");
+    titleLabel->setBuddy(titleField);
+    editorLayout->addWidget(titleLabel);
     editorLayout->addWidget(titleField);
-    editorLayout->addWidget(descField);
+
+    auto* descriptionPanel = new QWidget;
+    auto* descriptionLayout = new QVBoxLayout(descriptionPanel);
+    descriptionLayout->setContentsMargins(0, 0, 0, 0);
+    auto* descriptionLabel = new QLabel("Description:");
+    descriptionLabel->setBuddy(descField);
+    descriptionLayout->addWidget(descriptionLabel);
+    descriptionLayout->addWidget(descField);
+    editorLayout->addWidget(descriptionPanel);
     editorLayout->addWidget(new QLabel("Code:"));
-    editorLayout->addWidget(editorSplitter, 1);
     editorLayout->addWidget(findBar);
+    editorLayout->addWidget(editorSplitter, 1);
     editorLayout->addLayout(actionRow);
 
     QWidget* editorWidget = new QWidget;
@@ -633,54 +1592,36 @@ void MainWindow::setupUI() {
     mainSplitter->setSizes({200, 260, 640});        // first-run default; saved state overrides
 
     setCentralWidget(mainSplitter);
+
+    // Scroll-area viewports receive drops before the main window.
+    for (QWidget* viewport : {folderList->viewport(), snippetList->viewport(),
+                              codeEditor->viewport(), noteEditor->viewport()}) {
+        viewport->setAcceptDrops(true);
+        viewport->installEventFilter(this);
+    }
 }
 
 // ── Menu Bar ──────────────────────────────────────────────────
 void MainWindow::setupMenuBar() {
-    setContentsMargins(0, 6, 0, 0);
-    QMenu* appMenu = menuBar()->addMenu("SafeScript");
-    appMenu->addAction("About SafeScript", this, [this]() {
-        QDialog dlg(this);
-        dlg.setWindowTitle("About SafeScript");
-        dlg.setFixedSize(320, 280);
-        QVBoxLayout* layout = new QVBoxLayout(&dlg);
-        layout->setContentsMargins(20, 20, 20, 20);
-        layout->setSpacing(8);
+    auto* chrome = new QWidget(this);
+    chrome->setObjectName("windowChrome");
+    auto* layout = new QVBoxLayout(chrome);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(new WindowTitleBar(this));
+    auto* menuBar = new QMenuBar(chrome);
+    layout->addWidget(menuBar);
+    setMenuWidget(chrome);
 
-        QLabel* iconLabel = new QLabel;
-        iconLabel->setPixmap(QIcon(":/safescript.png").pixmap(72, 72));
-        iconLabel->setAlignment(Qt::AlignCenter);
-        layout->addWidget(iconLabel);
-
-        QLabel* text = new QLabel(
-            "<b>SafeScript v1.2.9</b><br>"
-            "Designed &amp; Programmed By<br>"
-            "Thomas J. Allen<br>"
-            "Copyright 2025<br>"
-            "BrainScanMedia.com, Inc."
-            );
-        text->setAlignment(Qt::AlignCenter);
-        layout->addWidget(text);
-        layout->addSpacing(8);
-        QPushButton* ok = new QPushButton("OK");
-        ok->setFixedWidth(80);
-        connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
-        QHBoxLayout* btnRow = new QHBoxLayout;
-        btnRow->addStretch();
-        btnRow->addWidget(ok);
-        btnRow->addStretch();
-        layout->addLayout(btnRow);
-        dlg.exec();
-    });
-    appMenu->addSeparator();
-    QAction* quitAction = new QAction("Quit", this);
+    QMenu* appMenu = addDropdown(menuBar, "SafeScript");
+    QAction* quitAction = new QAction(menuIcon("application-exit", QStyle::SP_DialogCloseButton), "Quit", this);
     quitAction->setShortcut(QKeySequence("Ctrl+Q"));
     connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
     appMenu->addAction(quitAction);
 
-    QMenu* editMenu = menuBar()->addMenu("Edit");
+    QMenu* editMenu = addDropdown(menuBar, "Edit");
 
-    QAction* cutAction = editMenu->addAction("Cut");
+    QAction* cutAction = editMenu->addAction(menuIcon("edit-cut", QStyle::SP_DialogDiscardButton), "Cut");
     cutAction->setShortcut(QKeySequence::Cut);
     connect(cutAction, &QAction::triggered, this, [this]() {
         if (auto* w = qobject_cast<QLineEdit*>(focusWidget()))           w->cut();
@@ -688,7 +1629,7 @@ void MainWindow::setupMenuBar() {
         else if (auto* w = qobject_cast<QTextEdit*>(focusWidget()))      w->cut();
     });
 
-    QAction* copyAction = editMenu->addAction("Copy");
+    QAction* copyAction = editMenu->addAction(menuIcon("edit-copy", QStyle::SP_FileIcon), "Copy");
     copyAction->setShortcut(QKeySequence::Copy);
     connect(copyAction, &QAction::triggered, this, [this]() {
         if (auto* w = qobject_cast<QLineEdit*>(focusWidget()))           w->copy();
@@ -696,7 +1637,7 @@ void MainWindow::setupMenuBar() {
         else if (auto* w = qobject_cast<QTextEdit*>(focusWidget()))      w->copy();
     });
 
-    QAction* pasteAction = editMenu->addAction("Paste");
+    QAction* pasteAction = editMenu->addAction(menuIcon("edit-paste", QStyle::SP_FileDialogContentsView), "Paste");
     pasteAction->setShortcut(QKeySequence::Paste);
     connect(pasteAction, &QAction::triggered, this, [this]() {
         if (auto* w = qobject_cast<QLineEdit*>(focusWidget()))           w->paste();
@@ -704,7 +1645,7 @@ void MainWindow::setupMenuBar() {
         else if (auto* w = qobject_cast<QTextEdit*>(focusWidget()))      w->paste();
     });
 
-    QAction* selectAllAction = editMenu->addAction("Select All");
+    QAction* selectAllAction = editMenu->addAction(menuIcon("edit-select-all", QStyle::SP_FileDialogListView), "Select All");
     selectAllAction->setShortcut(QKeySequence::SelectAll);
     connect(selectAllAction, &QAction::triggered, this, [this]() {
         if (auto* w = qobject_cast<QLineEdit*>(focusWidget()))           w->selectAll();
@@ -713,101 +1654,289 @@ void MainWindow::setupMenuBar() {
     });
 
     editMenu->addSeparator();
-    QAction* newSnippetAction = new QAction("New Snippet", this);
-    newSnippetAction->setShortcut(QKeySequence::New);   // Ctrl+N
-    connect(newSnippetAction, &QAction::triggered, this, &MainWindow::onNewSnippet);
-    editMenu->addAction(newSnippetAction);
-
-    QAction* saveAction = new QAction("Save Snippet", this);
-    saveAction->setShortcut(QKeySequence::Save);   // Ctrl+S
-    connect(saveAction, &QAction::triggered, this, &MainWindow::onSaveSnippet);
-    editMenu->addAction(saveAction);
-
-    QAction* copyCodeAction = new QAction("Copy Code", this);
+    QAction* copyCodeAction = new QAction(menuIcon("edit-copy", QStyle::SP_FileIcon), "Copy Code", this);
     copyCodeAction->setShortcut(QKeySequence("Ctrl+Shift+C"));
     connect(copyCodeAction, &QAction::triggered, this, &MainWindow::onCopyCode);
     editMenu->addAction(copyCodeAction);
 
     editMenu->addSeparator();
-    QAction* findAction = new QAction("Find / Replace", this);
+    QAction* findAction = new QAction(menuIcon("edit-find-replace", QStyle::SP_FileDialogDetailedView), "Find / Replace", this);
     findAction->setShortcut(QKeySequence::Find);   // Ctrl+F
     connect(findAction, &QAction::triggered, this, &MainWindow::onShowFindBar);
     editMenu->addAction(findAction);
 
-    QAction* cloneAction = new QAction("Clone Snippet", this);
+    auto* caseMenu = new DropdownMenu("Convert Case", editMenu);
+    caseMenu->setIcon(menuIcon("format-text-bold", QStyle::SP_FileIcon));
+    editMenu->addMenu(caseMenu);
+    const auto addCaseAction = [this, caseMenu](const QString& name,
+                                                QString (*convert)(const QString&)) {
+        caseMenu->addAction(name, codeEditor, [this, convert]() {
+            codeEditor->convertCase(convert);
+        });
+    };
+    addCaseAction("Title Case", titleCase);
+    addCaseAction("Upper Case", [](const QString& text) { return text.toUpper(); });
+    addCaseAction("Lower Case", [](const QString& text) { return text.toLower(); });
+    addCaseAction("Swap Case", swapCase);
+    addCaseAction("lowerCamelCase", [](const QString& text) { return identifierCase(text, false); });
+    addCaseAction("UpperCamelCase", [](const QString& text) { return identifierCase(text, true); });
+
+    editMenu->addSeparator();
+    auto* occurrenceAction = editMenu->addAction(
+        menuIcon("edit-find", QStyle::SP_FileDialogDetailedView), "Select Next Occurrence",
+        codeEditor, &CodeEditor::selectNextOccurrence);
+    occurrenceAction->setShortcut(QKeySequence("Ctrl+D"));
+
+    auto* splitSelectionAction = editMenu->addAction(
+        menuIcon("edit-select-all", QStyle::SP_FileDialogListView), "Split Selection into Lines",
+        codeEditor, &CodeEditor::splitSelectionIntoLines);
+    splitSelectionAction->setShortcut(QKeySequence("Ctrl+Shift+L"));
+    codeEditor->addAction(occurrenceAction);
+    codeEditor->addAction(splitSelectionAction);
+    occurrenceAction->setShortcutContext(Qt::WidgetShortcut);
+    splitSelectionAction->setShortcutContext(Qt::WidgetShortcut);
+
+    editMenu->addSeparator();
+    const auto addSortAction = [this, editMenu](const QString& label, const QKeySequence& shortcut,
+                                               Qt::CaseSensitivity sensitivity) {
+        auto* action = editMenu->addAction(menuIcon("view-sort-ascending", QStyle::SP_ArrowUp),
+                                           label, codeEditor, [this, sensitivity]() {
+            codeEditor->sortLines(sensitivity);
+        });
+        action->setShortcut(shortcut);
+        action->setShortcutContext(Qt::WidgetShortcut);
+        codeEditor->addAction(action);
+    };
+    addSortAction("Sort Lines", QKeySequence("F9"), Qt::CaseInsensitive);
+    addSortAction("Sort Lines (Case Sensitive)", QKeySequence("Ctrl+F9"), Qt::CaseSensitive);
+
+    QMenu* snippetMenu = addDropdown(menuBar, "Snippet");
+    QAction* newSnippetAction = new QAction(menuIcon("document-new", QStyle::SP_FileIcon), "New Snippet", this);
+    newSnippetAction->setShortcut(QKeySequence::New);   // Ctrl+N
+    connect(newSnippetAction, &QAction::triggered, this, &MainWindow::onNewSnippet);
+    snippetMenu->addAction(newSnippetAction);
+
+    QAction* saveAction = new QAction(menuIcon("document-save", QStyle::SP_DialogSaveButton), "Save Snippet", this);
+    saveAction->setShortcut(QKeySequence::Save);   // Ctrl+S
+    connect(saveAction, &QAction::triggered, this, &MainWindow::onSaveSnippet);
+    snippetMenu->addAction(saveAction);
+
+    QAction* cloneAction = new QAction(menuIcon("edit-copy", QStyle::SP_FileIcon), "Clone Snippet", this);
     cloneAction->setShortcut(QKeySequence("Ctrl+Shift+D"));
     connect(cloneAction, &QAction::triggered, this, &MainWindow::onCloneSnippet);
-    editMenu->addAction(cloneAction);
+    snippetMenu->addAction(cloneAction);
 
-    QAction* favAction = new QAction("Toggle Favorite", this);
-    favAction->setShortcut(QKeySequence("Ctrl+D"));
+    snippetMenu->addSeparator();
+    snippetMenu->addAction(menuIcon("document-import", QStyle::SP_ArrowDown), "Import Snippet…", this, &MainWindow::onImportSnippet);
+    snippetMenu->addAction(menuIcon("document-export", QStyle::SP_ArrowUp), "Export Snippet…", this, &MainWindow::onExportSnippet);
+    snippetMenu->addAction(menuIcon("folder-download", QStyle::SP_DirIcon), "Export Folder…", this, &MainWindow::onExportFolder);
+
+    snippetMenu->addSeparator();
+    QAction* favAction = new QAction(favoriteMenuIcon(), "Toggle Favorite", this);
     connect(favAction, &QAction::triggered, this, &MainWindow::onToggleFavorite);
-    editMenu->addAction(favAction);
+    snippetMenu->addAction(favAction);
 
-    // ── Database menu (backup / import / export) ─────────
-    QMenu* databaseMenu = menuBar()->addMenu("Database");
+    QMenu* toolsMenu = addDropdown(menuBar, "Tools");
+    const auto addCodeTool = [this, toolsMenu](const QIcon& icon, const QString& name,
+                                               QString (*transform)(const QString&),
+                                               QString (*report)(const QString&, const QString&)) {
+        toolsMenu->addAction(icon, name, this, [this, name, transform, report]() {
+            if (currentSnippetID < 0) {
+                showPopup(this, name, "Select a snippet first.");
+                return;
+            }
+            const QString original = codeEditor->toPlainText();
+            const QString updated = transform(original);
+            QString message = report(original, updated);
+            if (updated != original) {
+                QTextCursor cursor = codeEditor->textCursor();
+                const int position = cursor.position();
+                cursor.beginEditBlock();
+                cursor.select(QTextCursor::Document);
+                cursor.insertText(updated);
+                cursor.endEditBlock();
+                cursor.setPosition(qMin(position, int(updated.size())));
+                codeEditor->setTextCursor(cursor);
+                message += "\n\nReview the code, then click Save Script to keep the changes. "
+                           "Use Ctrl+Z to undo them.";
+            }
+            showPopup(this, name, message);
+        });
+    };
+    addCodeTool(menuIcon("document-edit", QStyle::SP_FileIcon),
+                "Prettify Code", prettifyCodeIndentation,
+                [](const QString& original, const QString& updated) {
+                    return original == updated ? QString("The indentation already matches the format.")
+                                               : QString("Code formatting completed successfully.");
+                });
+    addCodeTool(menuIcon("accessories-character-map", QStyle::SP_FileIcon),
+                "Convert Non-ASCII to ASCII", convertCodeToAscii,
+                [](const QString& original, const QString&) {
+                    const auto characters = original.toUcs4();
+                    const auto count = std::count_if(characters.cbegin(), characters.cend(),
+                                                     [](char32_t c) { return c > 0x7f; });
+                    return count == 1 ? QString("Converted 1 non-ASCII character.")
+                                      : QString("Converted %1 non-ASCII characters.").arg(count);
+                });
+    addCodeTool(menuIcon("format-indent-more", QStyle::SP_ArrowRight),
+                "Tab to Spaces", expandCodeTabs,
+                [](const QString& original, const QString&) {
+                    const auto count = original.count(u'\t');
+                    return count == 1 ? QString("Replaced 1 tab with spaces.")
+                                      : QString("Replaced %1 tabs with spaces.").arg(count);
+                });
+    addCodeTool(menuIcon("edit-clear", QStyle::SP_DialogResetButton),
+                "Remove Hidden Characters", removeHiddenCodeCharacters,
+                [](const QString& original, const QString& updated) {
+                    const auto count = original.size() - updated.size();
+                    return count == 1 ? QString("Removed 1 hidden character.")
+                                      : QString("Removed %1 hidden characters.").arg(count);
+                });
 
-    QAction* backupAction = databaseMenu->addAction("Backup Database…");
-    connect(backupAction, &QAction::triggered, this, &MainWindow::onBackupDatabase);
+    QMenu* optionsMenu = addDropdown(menuBar, "Options");
 
-    QAction* importAction = databaseMenu->addAction("Import Database…");
-    connect(importAction, &QAction::triggered, this, &MainWindow::onImportDatabase);
-
-    databaseMenu->addSeparator();
-    QAction* exportSnippetAction = databaseMenu->addAction("Export Snippet…");
-    connect(exportSnippetAction, &QAction::triggered, this, &MainWindow::onExportSnippet);
-
-    QAction* exportFolderAction = databaseMenu->addAction("Export Folder…");
-    connect(exportFolderAction, &QAction::triggered, this, &MainWindow::onExportFolder);
-
-    QMenu* optionsMenu = menuBar()->addMenu("Options");
-
-    wrapAction = new QAction("Wrap Code", this);
-    wrapAction->setCheckable(true);
-    connect(wrapAction, &QAction::triggered, this, &MainWindow::onToggleWrap);
-    optionsMenu->addAction(wrapAction);
-
-    lineNumberAction = new QAction("Line Numbers", this);
-    lineNumberAction->setCheckable(true);
-    connect(lineNumberAction, &QAction::triggered, this, &MainWindow::onToggleLineNumbers);
-    optionsMenu->addAction(lineNumberAction);
-
-    darkModeAction = new QAction("Dark Mode", this);
-    darkModeAction->setCheckable(true);
+    darkModeAction = new QAction(this);
     connect(darkModeAction, &QAction::triggered, this, &MainWindow::onToggleDarkMode);
     optionsMenu->addAction(darkModeAction);
 
-    optionsMenu->addSeparator();
+    auto* schemeMenu = new DropdownMenu("Color Schemes", optionsMenu);
+    schemeMenu->setIcon(menuIcon("preferences-desktop-theme", QStyle::SP_DesktopIcon));
+    optionsMenu->addMenu(schemeMenu);
+    colorSchemeActions = new QActionGroup(this);
+    for (int i = 0; i < int(std::size(colorSchemes)); ++i) {
+        auto* action = schemeMenu->addAction(colorSchemes[i].name);
+        action->setCheckable(true);
+        action->setData(i);
+        colorSchemeActions->addAction(action);
+    }
+    connect(colorSchemeActions, &QActionGroup::triggered, this, [this](QAction* action) {
+        DatabaseManager::instance().saveSetting("ColorScheme", action->text());
+        applyThemeStyles();
+    });
+
     QAction* incFontAction = new QAction("Increase Font Size", this);
     incFontAction->setShortcut(QKeySequence::ZoomIn);    // Ctrl++
     connect(incFontAction, &QAction::triggered, this, &MainWindow::onIncreaseFont);
-    optionsMenu->addAction(incFontAction);
+    addAction(incFontAction);
 
     QAction* decFontAction = new QAction("Decrease Font Size", this);
     decFontAction->setShortcut(QKeySequence::ZoomOut);   // Ctrl+-
     connect(decFontAction, &QAction::triggered, this, &MainWindow::onDecreaseFont);
-    optionsMenu->addAction(decFontAction);
+    addAction(decFontAction);
 
     QAction* resetFontAction = new QAction("Reset Font Size", this);
     resetFontAction->setShortcut(QKeySequence("Ctrl+0"));
     connect(resetFontAction, &QAction::triggered, this, &MainWindow::onResetFont);
-    optionsMenu->addAction(resetFontAction);
+    addAction(resetFontAction);
+
+    auto* fontMenu = new DropdownMenu("Font Style", optionsMenu);
+    fontMenu->setIcon(menuIcon("preferences-desktop-font", QStyle::SP_FileIcon));
+    optionsMenu->addMenu(fontMenu);
+
+    auto* fonts = new QActionGroup(fontMenu);
+    QFont monospace("Monospace");
+    monospace.setStyleHint(QFont::Monospace);
+    const QString defaultFamily = QFontInfo(monospace).family();
+    auto* defaultFont = fontMenu->addAction(QStringLiteral("Default — %1").arg(defaultFamily));
+    defaultFont->setCheckable(true);
+    defaultFont->setData("Monospace");
+    fonts->addAction(defaultFont);
+    defaultFont->setChecked(true);
+
+    const QString savedFont = DatabaseManager::instance().getSetting("EditorFontFamily", "Monospace");
+    const QStringList installedFonts = QFontDatabase::families();
+    const QStringList codingFonts = {
+        "Cascadia Mono", "DejaVu Sans Mono", "Fira Code", "Hack", "IBM Plex Mono",
+        "Inconsolata", "JetBrains Mono", "Liberation Mono", "Noto Sans Mono", "Source Code Pro"
+    };
+    for (const auto& family : codingFonts) {
+        if (family == defaultFamily || !installedFonts.contains(family) ||
+            !QFontDatabase::isFixedPitch(family))
+            continue;
+        auto* action = fontMenu->addAction(family);
+        action->setCheckable(true);
+        action->setData(family);
+        fonts->addAction(action);
+        if (family == savedFont) {
+            editorFontFamily = family;
+            action->setChecked(true);
+        }
+    }
+    connect(fonts, &QActionGroup::triggered, this, [this](QAction* action) {
+        editorFontFamily = action->data().toString();
+        DatabaseManager::instance().saveSetting("EditorFontFamily", editorFontFamily);
+        applyEditorFont();
+    });
+
+    fontMenu->addSeparator();
+    fontMenu->addAction(menuIcon("edit-undo", QStyle::SP_DialogResetButton), "Reset Font",
+                        this, [this, defaultFont]() {
+        editorFontFamily = defaultFont->data().toString();
+        defaultFont->setChecked(true);
+        DatabaseManager::instance().saveSetting("EditorFontFamily", editorFontFamily);
+        onResetFont();
+    });
+
+    auto* fontSizeMenu = new DropdownMenu("Font Size", optionsMenu);
+    fontSizeMenu->setIcon(menuIcon("format-font-size", QStyle::SP_FileIcon));
+    optionsMenu->addMenu(fontSizeMenu);
+    fontSizeMenu->addAction(menuIcon("list-add", QStyle::SP_ArrowUp), "Increase", this, &MainWindow::onIncreaseFont);
+    fontSizeMenu->addAction(menuIcon("edit-undo", QStyle::SP_DialogResetButton), "Reset", this, &MainWindow::onResetFont);
+    fontSizeMenu->addAction(menuIcon("list-remove", QStyle::SP_ArrowDown), "Decrease", this, &MainWindow::onDecreaseFont);
+
+    auto* lineHeightMenu = new DropdownMenu("Code Line Height", optionsMenu);
+    lineHeightMenu->setIcon(menuIcon("format-line-spacing", QStyle::SP_FileDialogListView));
+    optionsMenu->addMenu(lineHeightMenu);
+    codeLineSpacing = qBound(0, DatabaseManager::instance().getSetting("CodeLineSpacing", "2").toInt(), 16);
+    codeEditor->setLineSpacing(codeLineSpacing);
+    lineSpacingButton->setText(QStringLiteral("%1 px").arg(codeLineSpacing));
+    lineHeightMenu->addAction(menuIcon("list-add", QStyle::SP_ArrowUp), "Increase", this,
+                              [this]() { setCodeLineSpacing(codeLineSpacing + 2); });
+    lineHeightMenu->addAction(menuIcon("edit-undo", QStyle::SP_DialogResetButton), "Reset", this,
+                              [this]() { setCodeLineSpacing(2); });
+    lineHeightMenu->addAction(menuIcon("list-remove", QStyle::SP_ArrowDown), "Decrease", this,
+                              [this]() { setCodeLineSpacing(codeLineSpacing - 2); });
 
     optionsMenu->addSeparator();
-    QAction* resetLayoutAction = new QAction("Reset Window Size", this);
+    const QString previousVisibility = DatabaseManager::instance().getSetting("ShowSnippetDetails", "on");
+    const QIcon eyeIcon = eyeMenuIcon();
+    const auto addVisibilityAction = [this, optionsMenu, eyeIcon, previousVisibility](
+                                         QWidget* panel, const QString& name, const QString& setting) {
+        auto* action = optionsMenu->addAction(eyeIcon, QString());
+        const auto applyVisibility = [panel, action, name](bool visible) {
+            panel->setVisible(visible);
+            action->setText((visible ? "Hide " : "View ") + name);
+        };
+        applyVisibility(DatabaseManager::instance().getSetting(setting, previousVisibility) == "on");
+        connect(action, &QAction::triggered, this, [panel, setting, applyVisibility]() {
+            const bool visible = panel->isHidden();
+            applyVisibility(visible);
+            DatabaseManager::instance().saveSetting(setting, visible ? "on" : "off");
+        });
+    };
+    addVisibilityAction(descField->parentWidget(), "Description", "ShowSnippetDescription");
+    addVisibilityAction(noteEditor->parentWidget(), "Notes", "ShowSnippetNotes");
+
+    optionsMenu->addSeparator();
+    QAction* resetLayoutAction = new QAction(menuIcon("view-restore", QStyle::SP_TitleBarNormalButton), "Reset Window Size", this);
     connect(resetLayoutAction, &QAction::triggered, this, &MainWindow::onResetWindowSize);
     optionsMenu->addAction(resetLayoutAction);
 
-    QMenu* helpMenu = menuBar()->addMenu("Help");
-    helpMenu->addAction("Storage Location", this, [this](){
-        QDialog dlg(this);
-        dlg.setWindowTitle("Data Storage");
-        dlg.setFixedSize(600, 320);
-        QVBoxLayout* layout = new QVBoxLayout(&dlg);
+    optionsMenu->addSeparator();
+    auto* databaseMenu = new DropdownMenu("Database", optionsMenu);
+    databaseMenu->setIcon(menuIcon("drive-harddisk", QStyle::SP_DriveHDIcon));
+    optionsMenu->addMenu(databaseMenu);
+    databaseMenu->addAction(menuIcon("document-save-as", QStyle::SP_DialogSaveButton), "Backup Database…", this, &MainWindow::onBackupDatabase);
+    databaseMenu->addAction(menuIcon("document-import", QStyle::SP_ArrowDown), "Import Database…", this, &MainWindow::onImportDatabase);
+
+    QMenu* helpMenu = addDropdown(menuBar, "Help");
+    helpMenu->addAction(menuIcon("drive-harddisk", QStyle::SP_DriveHDIcon), "Storage Location", this, [this](){
+        PopupDialog dlg(this, "Data Storage");
+        dlg.setMinimumWidth(600);
+        dlg.resize(600, 320);
+        QVBoxLayout* layout = dlg.body;
         layout->setContentsMargins(20, 20, 20, 20);
         layout->setSpacing(8);
-        QLabel* title = new QLabel("<b>Data Storage</b>");
-        layout->addWidget(title);
         QLabel* desc = new QLabel("Snippets are saved locally depending on how you installed SafeScript:");
         desc->setWordWrap(true);
         layout->addWidget(desc);
@@ -830,9 +1959,58 @@ void MainWindow::setupMenuBar() {
         dlg.exec();
     });
     helpMenu->addSeparator();
-    helpMenu->addAction("Visit Our Website", this, [](){
-        QDesktopServices::openUrl(QUrl("https://www.brainscanmedia.com"));
+    helpMenu->addAction(menuIcon("internet-web-browser", QStyle::SP_DriveNetIcon), "Project Website", this, []() {
+        QDesktopServices::openUrl(QUrl("https://www.brainscanmedia.com/safescript.php"));
     });
+    helpMenu->addAction(menuIcon("flag", QStyle::SP_MessageBoxWarning), "Report an Issue", this, []() {
+        QDesktopServices::openUrl(QUrl("https://github.com/BrainScanMedia/SafeScript/issues"));
+    });
+    helpMenu->addAction(menuIcon("text-x-script", QStyle::SP_FileIcon), "Browse Source Code", this, []() {
+        QDesktopServices::openUrl(QUrl("https://github.com/BrainScanMedia/SafeScript"));
+    });
+    helpMenu->addAction(menuIcon("system-software-install", QStyle::SP_DriveNetIcon), "Flathub Website", this, []() {
+        QDesktopServices::openUrl(QUrl("https://flathub.org/en/apps/com.brainscanmedia.SafeScript"));
+    });
+    helpMenu->addSeparator();
+    helpMenu->addAction(menuIcon("internet-web-browser", QStyle::SP_DriveNetIcon),
+                        "Visit Author's Website", this, []() {
+        QDesktopServices::openUrl(QUrl("https://www.brainscanmedia.com/"));
+    });
+    helpMenu->addSeparator();
+    helpMenu->addAction(menuIcon("help-about", QStyle::SP_MessageBoxInformation), "About SafeScript", this, [this]() {
+        PopupDialog dlg(this, "About SafeScript");
+        dlg.setMinimumWidth(320);
+        dlg.resize(320, 280);
+        QVBoxLayout* layout = dlg.body;
+        layout->setContentsMargins(20, 20, 20, 20);
+        layout->setSpacing(8);
+
+        QLabel* iconLabel = new QLabel;
+        iconLabel->setPixmap(QIcon(":/safescript.png").pixmap(72, 72));
+        iconLabel->setAlignment(Qt::AlignCenter);
+        layout->addWidget(iconLabel);
+
+        QLabel* text = new QLabel(
+            "<b>SafeScript v1.3.0</b><br>"
+            "Designed &amp; Programmed By<br>"
+            "Thomas J. Allen<br>"
+            "Copyright 2026<br>"
+            "BrainScanMedia.com, Inc."
+            );
+        text->setAlignment(Qt::AlignCenter);
+        layout->addWidget(text);
+        layout->addSpacing(8);
+        QPushButton* ok = new QPushButton("OK");
+        ok->setFixedWidth(80);
+        connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+        QHBoxLayout* btnRow = new QHBoxLayout;
+        btnRow->addStretch();
+        btnRow->addWidget(ok);
+        btnRow->addStretch();
+        layout->addLayout(btnRow);
+        dlg.exec();
+    });
+    appMenu->addSeparator();
 }
 
 // ── Database Slots ────────────────────────────────────────────
@@ -852,10 +2030,10 @@ void MainWindow::onBackupDatabase() {
 
     QString err;
     if (DatabaseManager::instance().backupTo(dest, &err)) {
-        QMessageBox::information(this, "Backup Complete",
+        showPopup(this, "Backup Complete",
                                  "Your database was backed up successfully to:\n\n" + dest);
     } else {
-        QMessageBox::warning(this, "Backup Failed",
+        showPopup(this, "Backup Failed",
                              err.isEmpty() ? "The backup could not be completed." : err);
     }
 }
@@ -872,17 +2050,12 @@ void MainWindow::onImportDatabase() {
     if (src.isEmpty()) return;
 
     // Importing overwrites everything — confirm first.
-    QMessageBox confirm(this);
-    confirm.setWindowTitle("Import Database");
-    confirm.setIcon(QMessageBox::Warning);
-    confirm.setText("Importing will overwrite your current database.");
-    confirm.setInformativeText(
-        "All folders and snippets currently in SafeScript will be replaced by "
-        "the contents of the selected file. This cannot be undone.\n\n"
-        "Consider backing up your current database first.\n\nContinue?");
-    confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-    confirm.setDefaultButton(QMessageBox::Cancel);
-    if (confirm.exec() != QMessageBox::Yes) return;
+    if (showPopup(this, "Import Database",
+                  "Importing will overwrite your current database. All folders and snippets "
+                  "will be replaced by the contents of the selected file. This cannot be undone.\n\n"
+                  "Consider backing up your current database first.\n\nContinue?",
+                  QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes)
+        return;
 
     QString err;
     if (DatabaseManager::instance().importFrom(src, &err)) {
@@ -894,30 +2067,32 @@ void MainWindow::onImportDatabase() {
         snippetList->clear();
         clearEditor();
         loadFolders();
-        QMessageBox::information(this, "Import Complete",
+        showPopup(this, "Import Complete",
                                  "The database was imported successfully.");
     } else {
-        QMessageBox::warning(this, "Import Failed",
+        showPopup(this, "Import Failed",
                              err.isEmpty() ? "The database could not be imported." : err);
     }
 }
 
 // ── Option Slots ──────────────────────────────────────────────
 void MainWindow::onToggleWrap() {
-    wrapEnabled = wrapAction->isChecked();
+    wrapEnabled = wrapCheck->isChecked();
     codeEditor->setLineWrapMode(wrapEnabled ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
     DatabaseManager::instance().saveSetting("WrapCode", wrapEnabled ? "on" : "off");
 }
 
 void MainWindow::onToggleDarkMode() {
-    darkModeEnabled = darkModeAction->isChecked();
-    qApp->setPalette(darkModeEnabled ? darkPalette() : lightPalette());
-    applyThemeStyles(darkModeEnabled);
+    darkModeEnabled = !codeEditor->darkMode;
+    if (auto* action = colorSchemeActions->checkedAction())
+        action->setChecked(false);
+    DatabaseManager::instance().saveSetting("ColorScheme", "");
+    applyThemeStyles();
     DatabaseManager::instance().saveSetting("DarkMode", darkModeEnabled ? "on" : "off");
 }
 
 void MainWindow::onToggleLineNumbers() {
-    lineNumbersEnabled = lineNumberAction->isChecked();
+    lineNumbersEnabled = lineNumberCheck->isChecked();
     codeEditor->showLineNumbers = lineNumbersEnabled;
     lineNumberArea->setVisible(lineNumbersEnabled);
     codeEditor->updateLineNumberAreaWidth();
@@ -969,10 +2144,8 @@ void MainWindow::loadFolders() {
 }
 
 void MainWindow::onNewFolder() {
-    bool ok;
-    QString name = QInputDialog::getText(this, "New Folder", "Folder Name:",
-                                         QLineEdit::Normal, "", &ok);
-    if (ok && !name.isEmpty()) {
+    const QString name = promptPopupText(this, "New Folder", "Folder Name:", "");
+    if (!name.isEmpty()) {
         int newID = DatabaseManager::instance().insertFolder(name);
         auto* item = new QListWidgetItem(name);
         item->setData(Qt::UserRole, newID);
@@ -988,10 +2161,10 @@ void MainWindow::onDeleteFolder() {
     if (!item) return;
     int id = item->data(Qt::UserRole).toInt();
 
-    QDialog dlg(this);
-    dlg.setWindowTitle("Delete Folder");
-    dlg.setFixedSize(360, 130);
-    QVBoxLayout* layout = new QVBoxLayout(&dlg);
+    PopupDialog dlg(this, "Delete Folder", QStyle::SP_MessageBoxQuestion);
+    dlg.setMinimumWidth(360);
+    dlg.resize(360, 130);
+    QVBoxLayout* layout = dlg.body;
     layout->setContentsMargins(16, 16, 16, 16);
     QLabel* msg = new QLabel("Deleting this folder will also remove\nall associated snippets.");
     msg->setAlignment(Qt::AlignLeft);
@@ -1043,10 +2216,8 @@ void MainWindow::onFolderSelected(QListWidgetItem* current, QListWidgetItem* pre
 
 void MainWindow::onRenameFolder(QListWidgetItem* item) {
     if (!item) return;
-    bool ok;
-    QString newName = QInputDialog::getText(this, "Rename Folder", "New Name:",
-                                            QLineEdit::Normal, item->text(), &ok);
-    if (ok && !newName.isEmpty()) {
+    const QString newName = promptPopupText(this, "Rename Folder", "New Name:", item->text());
+    if (!newName.isEmpty()) {
         int id = item->data(Qt::UserRole).toInt();
         DatabaseManager::instance().renameFolder(id, newName);
         item->setText(newName);
@@ -1170,10 +2341,10 @@ void MainWindow::onDeleteSnippet() {
     auto* item = snippetList->currentItem();
     if (!item) return;
 
-    QDialog dlg(this);
-    dlg.setWindowTitle("Delete Snippet");
-    dlg.setFixedSize(360, 130);
-    QVBoxLayout* layout = new QVBoxLayout(&dlg);
+    PopupDialog dlg(this, "Delete Snippet", QStyle::SP_MessageBoxQuestion);
+    dlg.setMinimumWidth(360);
+    dlg.resize(360, 130);
+    QVBoxLayout* layout = dlg.body;
     layout->setContentsMargins(16, 16, 16, 16);
     QLabel* msg = new QLabel("Are you sure you want to delete this snippet?\nThis cannot be undone.");
     msg->setAlignment(Qt::AlignLeft);
@@ -1279,23 +2450,7 @@ void MainWindow::onSaveSnippet() {
     saveCurrentSnippet();
     resortSnippetList();   // a changed title (or a newly-titled snippet) may re-order the list
 
-    QDialog dlg(this);
-    dlg.setWindowTitle("Saved");
-    dlg.setFixedSize(260, 110);
-    QVBoxLayout* layout = new QVBoxLayout(&dlg);
-    layout->setContentsMargins(16, 16, 16, 16);
-    QLabel* msg = new QLabel("Snippet saved successfully.");
-    msg->setAlignment(Qt::AlignLeft);
-    layout->addWidget(msg);
-    layout->addSpacing(8);
-    QPushButton* ok = new QPushButton("OK");
-    ok->setFixedWidth(80);
-    connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
-    QHBoxLayout* btnRow = new QHBoxLayout;
-    btnRow->addStretch();
-    btnRow->addWidget(ok);
-    layout->addLayout(btnRow);
-    dlg.exec();
+    showPopup(this, "Saved", "Snippet saved successfully.");
 }
 
 // Copies the current snippet's code to the system clipboard, with brief
@@ -1316,6 +2471,9 @@ void MainWindow::onSearchTextChanged(const QString&) {
 }
 
 void MainWindow::clearEditor() {
+    codeEditor->clearMultipleCursors();
+    btnFavorite->setEnabled(false);
+    updateFavoriteButton(false);
     loadingSnippet = true;
     currentSnippetID = -1;
     titleField->clear();
@@ -1328,6 +2486,9 @@ void MainWindow::clearEditor() {
 }
 
 void MainWindow::populateEditor(const Snippet& s) {
+    codeEditor->clearMultipleCursors();
+    btnFavorite->setEnabled(true);
+    updateFavoriteButton(s.favorite);
     loadingSnippet = true;
     titleField->setText(s.title);
     descField->setText(s.description);
@@ -1353,7 +2514,7 @@ void MainWindow::markDirty() {
 }
 
 int MainWindow::promptUnsaved() {
-    return QMessageBox::question(
+    return showPopup(
         this, "Unsaved Changes",
         "This snippet has unsaved changes.\n\nDo you want to save them?",
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
@@ -1413,9 +2574,19 @@ void MainWindow::updateStatusInfo() {
 }
 
 // ── Font size ─────────────────────────────────────────────────
+void MainWindow::setCodeLineSpacing(int pixels) {
+    codeLineSpacing = qBound(0, pixels, 16);
+    codeEditor->setLineSpacing(codeLineSpacing);
+    lineSpacingButton->setText(QStringLiteral("%1 px").arg(codeLineSpacing));
+    DatabaseManager::instance().saveSetting("CodeLineSpacing", QString::number(codeLineSpacing));
+}
+
 void MainWindow::applyEditorFont() {
-    QFont f("Monospace", editorFontSize);
+    fontSizeButton->setText(QString::number(editorFontSize));
+    QFont f(editorFontFamily, editorFontSize);
     f.setStyleHint(QFont::Monospace);
+    titleField->setFont(f);
+    descField->setFont(f);
     codeEditor->setFont(f);
     noteEditor->setFont(f);
     codeEditor->updateLineNumberAreaWidth();
@@ -1480,8 +2651,8 @@ void MainWindow::onReplaceOne() {
     QTextCursor c = codeEditor->textCursor();
     const bool caseSensitive = findCaseCheck->isChecked();
     const bool matches = c.hasSelection() &&
-        (caseSensitive ? c.selectedText() == term
-                       : c.selectedText().compare(term, Qt::CaseInsensitive) == 0);
+                         (caseSensitive ? c.selectedText() == term
+                                        : c.selectedText().compare(term, Qt::CaseInsensitive) == 0);
     if (matches)
         c.insertText(replaceField->text());
     onFindNext();
@@ -1519,6 +2690,11 @@ void MainWindow::onCloneSnippet() {
     statusBar()->showMessage("Snippet cloned.", 2000);
 }
 
+void MainWindow::updateFavoriteButton(bool favorite) {
+    btnFavorite->setText(favorite ? "★ Favorite" : "☆ Favorite");
+    btnFavorite->setToolTip(favorite ? "Remove from favorites" : "Add to favorites");
+}
+
 void MainWindow::onToggleFavorite() {
     if (currentSnippetID < 0) return;
 
@@ -1534,6 +2710,7 @@ void MainWindow::onToggleFavorite() {
         }
     }
     DatabaseManager::instance().setSnippetFavorite(currentSnippetID, newFav);
+    updateFavoriteButton(newFav);
     resortSnippetList();
     statusBar()->showMessage(newFav ? "Added to favorites." : "Removed from favorites.", 2000);
 }
@@ -1560,27 +2737,29 @@ void MainWindow::onSnippetContextMenu(const QPoint& pos) {
     const Snippet* s = currentSnippet();
     if (!s) return;
 
-    QMenu menu(this);
-    QAction* favAct    = menu.addAction(s->favorite ? "Unfavorite" : "Favorite ★");
-    QAction* cloneAct  = menu.addAction("Clone");
+    DropdownMenu menu(QString(), this);
+    QAction* favAct    = menu.addAction(favoriteMenuIcon(), s->favorite ? "Unfavorite" : "Favorite ★");
+    QAction* cloneAct  = menu.addAction(menuIcon("edit-copy", QStyle::SP_FileIcon), "Clone");
 
-    QMenu* moveMenu = menu.addMenu("Move to Folder");
+    auto* moveMenu = new DropdownMenu("Move To", &menu);
+    moveMenu->setIcon(menuIcon("folder-move", QStyle::SP_DirIcon));
+    menu.addMenu(moveMenu);
     QList<QAction*> moveActions;
     for (int i = 0; i < folderList->count(); ++i) {
         int fid = folderList->item(i)->data(Qt::UserRole).toInt();
         if (fid == currentFolderID) continue;
-        QAction* a = moveMenu->addAction(folderList->item(i)->text());
+        QAction* a = moveMenu->addAction(menuIcon("folder", QStyle::SP_DirIcon), folderList->item(i)->text());
         a->setData(fid);
         moveActions.append(a);
     }
     if (moveActions.isEmpty()) {
-        QAction* none = moveMenu->addAction("(no other folders)");
+        QAction* none = moveMenu->addAction(menuIcon("folder", QStyle::SP_DirIcon), "(no other folders)");
         none->setEnabled(false);
     }
 
-    QAction* exportAct = menu.addAction("Export Snippet…");
+    QAction* exportAct = menu.addAction(menuIcon("document-export", QStyle::SP_ArrowUp), "Export Snippet…");
     menu.addSeparator();
-    QAction* delAct = menu.addAction("Delete");
+    QAction* delAct = menu.addAction(menuIcon("edit-delete", QStyle::SP_TrashIcon), "Delete");
 
     QAction* chosen = menu.exec(snippetList->viewport()->mapToGlobal(pos));
     if (!chosen) return;
@@ -1620,16 +2799,16 @@ void MainWindow::onExportSnippet() {
     if (exportSnippetToPath(code, dest))
         statusBar()->showMessage("Snippet exported.", 2000);
     else
-        QMessageBox::warning(this, "Export Failed", "Could not write to:\n" + dest);
+        showPopup(this, "Export Failed", "Could not write to:\n" + dest);
 }
 
 void MainWindow::onExportFolder() {
     if (currentFolderID < 0) {
-        QMessageBox::information(this, "Export Folder", "Select a folder first.");
+        showPopup(this, "Export Folder", "Select a folder first.");
         return;
     }
     if (currentSnippets.isEmpty()) {
-        QMessageBox::information(this, "Export Folder", "This folder has no snippets to export.");
+        showPopup(this, "Export Folder", "This folder has no snippets to export.");
         return;
     }
 
@@ -1655,55 +2834,105 @@ void MainWindow::onExportFolder() {
 }
 
 // ── Drag & drop: create snippets from dropped files ───────────
-void MainWindow::createSnippetFromFile(const QString& path) {
-    if (currentFolderID < 0) return;
-    QFileInfo fi(path);
-    if (!fi.isFile()) return;
-    if (fi.size() > 5 * 1024 * 1024) {          // skip very large files
-        statusBar()->showMessage("Skipped (too large): " + fi.fileName(), 3000);
-        return;
-    }
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-    QTextStream in(&f);
-    const QString text = in.readAll();
-    f.close();
+int MainWindow::createSnippetFromFile(const QString& path) {
+    QFileInfo fileInfo(path);
+    if (!fileInfo.isFile() || fileInfo.size() > 5 * 1024 * 1024)
+        return -1;
 
-    int newID = DatabaseManager::instance().insertSnippet(currentFolderID, fi.fileName(), text);
-    loadSnippets(currentFolderID, newID);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return -1;
+    QTextStream stream(&file);
+    const QString text = stream.readAll();
+    if (file.error() != QFileDevice::NoError) return -1;
+
+    return DatabaseManager::instance().insertSnippet(currentFolderID, fileInfo.fileName(), text);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
-    if (event->mimeData()->hasUrls()) {
-        for (const QUrl& u : event->mimeData()->urls())
-            if (u.isLocalFile()) { event->acceptProposedAction(); return; }
+    if (hasLocalFiles(event->mimeData()))
+        event->acceptProposedAction();
+}
+
+void MainWindow::onImportSnippet() {
+    if (currentFolderID < 0) {
+        showPopup(this, "Import Snippet",
+                                 "Select a category before importing snippets.");
+        return;
     }
+
+    const QStringList paths = QFileDialog::getOpenFileNames(this, "Import Snippet");
+    importSnippetFiles(paths);
 }
 
 void MainWindow::dropEvent(QDropEvent* event) {
-    if (!event->mimeData()->hasUrls()) return;
-    if (currentFolderID < 0) {
-        QMessageBox::information(this, "Drop File",
-            "Select a folder first, then drop files to add them as snippets.");
-        return;
+    QStringList paths;
+    for (const QUrl& url : event->mimeData()->urls()) {
+        if (url.isLocalFile()) paths.append(url.toLocalFile());
     }
+    if (importSnippetFiles(paths))
+        event->acceptProposedAction();
+}
+
+bool MainWindow::importSnippetFiles(const QStringList& paths) {
+    if (paths.isEmpty()) return false;
+    if (currentFolderID < 0) {
+        showPopup(this, "Import Snippet",
+                                 "Select a category before importing snippets.");
+        return false;
+    }
+
     // Protect any unsaved edits before we start replacing the list selection.
-    if (!maybeSave()) return;
+    if (!maybeSave()) return false;
 
     int created = 0;
-    for (const QUrl& u : event->mimeData()->urls()) {
-        if (!u.isLocalFile()) continue;
-        QFileInfo fi(u.toLocalFile());
-        if (!fi.isFile()) continue;
-        createSnippetFromFile(u.toLocalFile());
+    int lastSnippetID = -1;
+    QStringList failed;
+    for (const QString& path : paths) {
+        const int id = createSnippetFromFile(path);
+        if (id < 0) {
+            failed.append(QFileInfo(path).fileName());
+            continue;
+        }
+        lastSnippetID = id;
         ++created;
     }
-    if (created > 0) {
-        statusBar()->showMessage(
-            QString("Created %1 snippet%2 from dropped file%2")
-                .arg(created).arg(created == 1 ? "" : "s"), 3000);
-        event->acceptProposedAction();
+    if (created > 0)
+        loadSnippets(currentFolderID, lastSnippetID);
+
+    QString message = QString("Imported %1 snippet(s)").arg(created);
+    if (!failed.isEmpty())
+        message += ". Could not import: " + failed.join(", ");
+    statusBar()->showMessage(message, 5000);
+    return created > 0;
+}
+
+void MainWindow::updateWindowCorners() {
+    QWidget* header = menuWidget();
+    QStatusBar* footer = statusBar();
+    if (isMaximized() || isFullScreen()) {
+        clearMask();
+        if (header) header->clearMask();
+        footer->clearMask();
+        return;
     }
+
+    const QRegion shape = roundedWindowRegion(rect());
+    setMask(shape);
+
+    // Clip the painted header and footer as well as the top-level window.
+    if (header) header->setMask(shape);
+    footer->setMask(shape.translated(0, footer->height() - height()));
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    updateWindowCorners();
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange)
+        updateWindowCorners();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
